@@ -322,6 +322,37 @@ check-r68: $(BUILD)/abirun $(R68TESTS:%=$(BUILD)/r68/%.elf)
 	  if $(BUILD)/abirun $(BUILD)/r68/$$t.elf; then echo "PASS: r68/$$t"; \
 	  else echo "FAIL: r68/$$t"; fail=1; fi; done; exit $$fail
 
+# gastor68: the tests' C side compiled to assembler (-S), translated to
+# r68 syntax by gastor68 and back by r68togas, assembled by GNU as, and run
+# as the tests are; at -O0 and -O2.
+#   make check-gastor68
+$(BUILD)/gastor68: $(HERE)../../src/elf2mod/gastor68.c
+	mkdir -p $(BUILD)
+	$(HOSTCC) -O2 -o $@ $<
+
+$(BUILD)/g68/%.elf: $(HERE)tests/%.c $(HERE)tests/%.S $(BUILD)/gastor68 $(BUILD)/r68togas $(HERE)crt0.S \
+	$(HERE)support.S $(HERE)abi.lds $(CC1) $$(wildcard $(HERE)tests/$$*.flags) $$(LIBGCC)
+	mkdir -p $(BUILD)/g68
+	$(GCC) -S $(or $(file <$(HERE)tests/$*.flags),$(CFLAGS_T)) -o $(BUILD)/g68/$*.s $(HERE)tests/$*.c
+	$(BUILD)/gastor68 -o $(BUILD)/g68/$*.a $(BUILD)/g68/$*.s
+	$(BUILD)/r68togas -m$(if $(findstring 68020,$(CFLAGS_T)),2,0) -o $(BUILD)/g68/$*.r68.s $(BUILD)/g68/$*.a
+	$(TPREFIX)as -o $(BUILD)/g68/$*.o $(BUILD)/g68/$*.r68.s
+	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/g68/$*-stubs.o $(HERE)tests/$*.S
+	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/g68/crt0.o $(HERE)crt0.S
+	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/g68/support.o $(HERE)support.S
+	$(TPREFIX)ld --no-check-sections -T $(HERE)abi.lds -o $@ $(BUILD)/g68/crt0.o $(BUILD)/g68/$*.o \
+	  $(BUILD)/g68/$*-stubs.o $(BUILD)/g68/support.o $(LIBGCC)
+
+run-gastor68: $(BUILD)/abirun $(TESTS:%=$(BUILD)/g68/%.elf)
+	@fail=0; for t in $(TESTS); do \
+	  if $(BUILD)/abirun $(ABIRUN_FLAGS) $(BUILD)/g68/$$t.elf; then echo "PASS: g68/$$t"; \
+	  else echo "FAIL: g68/$$t"; fail=1; fi; done; exit $$fail
+
+check-gastor68:
+	@for o in O0 O2; do echo "== gastor68, -$$o"; \
+	  $(MAKE) --no-print-directory BUILD=$(BUILD)/g68-$$o \
+	    CFLAGS_T="-$$o -mpcrel -ma6rel -mos9call" run-gastor68 || exit 1; done
+
 # OS-9 itself: the Level 3 tests (mwtests/) built with -DREAL_OS9, which
 # adds checks needing system calls (memory, files, the math trap), as real
 # modules: Microware's cstart.r as the startup (rof2elf, with its __os9_*
