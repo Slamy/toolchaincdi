@@ -9,6 +9,7 @@
 #   make check-newlib    run nltests/ with newlib, in both multilibs (see below)
 #   make check-lsym      elf2mod's btext, bname and etext (see below)
 #   make check-r68       tests with r68-syntax stubs, through r68togas (see below)
+#   make check-gastor68  the tests' C side through gastor68 and back (see below)
 #   make check-l68 L68=... [MWLIB=...]  run them as modules linked by
 #                        Microware's l68, through elf2rof; with MWLIB also
 #                        the Level 3 tests, with Microware's clib.l (see below)

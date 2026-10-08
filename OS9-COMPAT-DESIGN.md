@@ -1377,6 +1377,11 @@ runs code (`test/abi-exec`).
 - **newlib:** `make check-newlib` runs `nltests/` in both multilibs: `sprintf`, `sscanf`,
   `strtol`, `qsort` calling back, a `va_list` passed to `vsnprintf`, `setjmp`/`longjmp` and
   `malloc`, as OS-9 modules, since newlib's stdio makes programs larger than 32 KB.
+- **r68 sources:** `make check-r68` runs Level 2 tests whose assembly side is written in
+  Microware's r68 syntax (`r68tests/`, the code of `tests/*.S`), translated by `r68togas` and
+  assembled by GNU `as`, as `m68k-os9-r68` does; `make check-gastor68` compiles the tests' C side
+  with `-S`, translates it to r68 syntax with `gastor68` and back with `r68togas`, and runs the
+  result, at `-O0` and `-O2`.
 - **On OS-9 itself:** `make check-os9mod CDIRUN=…` runs the `check-mod` modules (`tests/` and
   `modtests/` at `-O2 -mpcrel -ma6rel -mos9call`) on a CD-i 605 through `cdirun`, like
   `check-os9` (Level 3). It needs none of Microware's files. `crt0` asks for 48 KB of stack: a 40
