@@ -17,9 +17,9 @@ _start:
 | edition 0 (elf2mod's default), entered at _start; with 48 KB of stack,
 | as saves' bigframe has a 40 KB frame, which runs off the data area on
 | OS-9 with elf2mod's default of 3 KB (a bus error).
-	.globl	__os9_tylan, __os9_attrev, __os9_edition, __os9_stack
+	.globl	__os9_typelang, __os9_attrev, __os9_edition, __os9_stack
 	.globl	__os9_entry
-	.set	__os9_tylan, 0x0101
+	.set	__os9_typelang, 0x0101
 	.set	__os9_attrev, 0x8001
 	.set	__os9_edition, 0
 	.set	__os9_stack, 0xC000

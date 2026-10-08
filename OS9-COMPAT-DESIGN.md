@@ -1,14 +1,14 @@
-# OS-9 compatibility design notes
+# OS-9 compatibility design
 
 *Written with assistance from Claude (Anthropic); research, analysis and text by Claude, design
 decisions and review by CD-i Fan <cdifan@gmail.com>.*
 
-Design notes and plans for extending this toolchain (`m68k-elfos9`, the GCC/binutils/newlib
-fork used for CD-i and OS-9/68000 development) so that GCC-built code can interoperate with code
-and libraries built by Microware's own compilers.
-
-Status: **implementation**. Most of what's described here is implemented and tested; section 12
-lists what's done and what's still open.
+How this toolchain (`m68k-elfos9`, the GCC/binutils/newlib fork used for CD-i and OS-9/68000
+development) interoperates with code and libraries built by Microware's own compilers: the
+calling convention Microware's compilers use and how GCC follows it, the conversion between
+Microware's object format (ROF) and ELF, the drop-ins for Microware's tools, and how all of it is
+tested. The tools' own documents, in the [m68k-os9-tools](https://github.com/cdifan/m68k-os9-tools)
+repository, give their usage and details; this document gives the design and its reasons.
 
 Contents:
 
@@ -18,34 +18,34 @@ Contents:
 4. [`-mos9call` design](#4--mos9call-design)
 5. [How dependent is the toolchain on ELF?](#5-how-dependent-is-the-toolchain-on-elf)
 6. [ROF interoperability: `rof2elf` and `elf2rof`](#6-rof-interoperability-rof2elf-and-elf2rof)
-7. [Microware tools available for testing](#7-microware-tools-available-for-testing)
+7. [Microware tools used for testing](#7-microware-tools-used-for-testing)
 8. [Build and host environments](#8-build-and-host-environments)
-9. [Emulator serial bridge](#9-emulator-serial-bridge)
+9. [Running tests on OS-9: `cdirun`](#9-running-tests-on-os-9-cdirun)
 10. [Licensing and upstreaming](#10-licensing-and-upstreaming)
-11. [Test plan](#11-test-plan)
-12. [Open questions and next steps](#12-open-questions-and-next-steps)
+11. [Tests](#11-tests)
+12. [Open questions](#12-open-questions)
 13. [References](#13-references)
 
 ---
 
 ## 1. Current toolchain
 
-The [`Dockerfile`](Dockerfile) builds, from the pinned submodules under `src/` (as on `compat-dev`;
-`main` still pins Murachue's GCC, newlib and elf2mod):
+The [`Dockerfile`](Dockerfile) builds, from the pinned submodules under `src/`:
 
 | Component | Source | Notes |
 |---|---|---|
-| binutils 2.35 | [murachue/binutils-gdb](https://github.com/murachue/binutils-gdb) `binutils-2_35-branch` | unmodified upstream 2.35; the target name is accepted through generic m68k patterns |
-| GCC 11.1.0 | [cdifan/gcc](https://github.com/cdifan/gcc) `11.1.0-os9-compat` (Murachue's `11.1.0-os9` plus this work) | `-mpcrel`, `-ma6rel`, `-mbsrw` (see §2), and this work's options |
-| newlib 4.1.0 | [cdifan/newlib-cygwin](https://github.com/cdifan/newlib-cygwin) `newlib-4.1.0-os9-compat` | no syscalls; multilibs for both conventions (§4) |
-| elf2mod | [cdifan/elf2mod](https://github.com/cdifan/elf2mod) `main-compat` | linked ELF → OS-9 module; also `rof2elf`, `elf2rof` (§6) |
+| GCC 11.1.0 | [cdifan/gcc](https://github.com/cdifan/gcc) `11.1.0-os9-compat` (Murachue's `11.1.0-os9` plus this work) | `-mpcrel`, `-ma6rel`, `-mbsrw` (§2), and the OS-9 options (§4) |
+| newlib 4.1.0 | [cdifan/newlib-cygwin](https://github.com/cdifan/newlib-cygwin) `newlib-4.1.0-os9-compat` | multilibs for both conventions, and an OS-9 runtime in libgloss (§4) |
+| m68k-os9-tools | [cdifan/m68k-os9-tools](https://github.com/cdifan/m68k-os9-tools) `main-compat` | a heavily extended fork of Murachue's elf2mod: `elf2mod` (linked ELF → OS-9 module), `rof2elf`, `elf2rof` (§6), and the drop-ins for Microware's tools |
 | psximager | [murachue/psximager](https://github.com/murachue/psximager) `cdi` | disc images |
 
 Build flow for an application:
 
 ```
-gcc -mpcrel -ma6rel  →  as (ELF .o)  →  ld -q -T os9.lds (ELF, .data at -0x8000)  →  elf2mod  →  OS-9 module
+gcc -mpcrel -ma6rel  →  as (ELF .o)  →  ld -q -T os9.ld (ELF, .data at -0x8000)  →  elf2mod  →  OS-9 module
 ```
+
+`m68k-os9-gcc` does all of it in one step, with newlib's OS-9 runtime (§4, "Libraries").
 
 The OS-9 data model: code is position independent (PC-relative), and global data is addressed
 relative to `a6`, which points 0x8000 bytes past the start of the static storage area. a5 is the
@@ -53,8 +53,8 @@ frame pointer when one is used (code built with `-fomit-frame-pointer`, such as 
 
 ## 2. The GCC fork vs. mainline
 
-The `11.1.0-os9` branch is exactly **9 commits on top of the `releases/gcc-11.1.0` tag**
-(commit `50bc918`), 0 commits behind:
+Murachue's `11.1.0-os9` branch is **9 commits on top of the `releases/gcc-11.1.0` tag** (commit
+`50bc918`):
 
 ```
 053e3cae1 static const struct[][] in a function was become a6rel but should be pcrel
@@ -83,7 +83,7 @@ git -C src/gcc diff --stat gcc-11.1.0-base HEAD
 
 ### Portability to current mainline (GCC 17)
 
-The whole fork diff was applied as a dry run to gcc-mirror `master` (`BASE-VER` 17.0.0):
+Murachue's fork diff, applied as a dry run to gcc-mirror `master` (`BASE-VER` 17.0.0):
 
 - After mapping `m68k.c` → `m68k.cc` (renamed in GCC 12), every hunk applies, only at shifted
   line numbers. That covers `-mbsrw`, `-ma6rel` (including the `sym(%a6)` output in
@@ -97,13 +97,10 @@ The whole fork diff was applied as a dry run to gcc-mirror `master` (`BASE-VER` 
   under LRA.
 - The cc0 removal in GCC 12 rewrote m68k condition-code handling, but none of the fork's commits
   touch that area.
-- binutils needs no changes at all: the pinned commit is upstream 2.35, and the `elfos9` name is
-  accepted through generic patterns.
 
-None of this has been built or tested yet. The argument-passing hooks (`function_arg_info`) are
-the same from GCC 10 through 17, so `-mos9call` (§4) would be nearly identical on either base.
-**Decision:** implement it on GCC 11.1, the fork's current baseline. Porting to GCC 17 can follow
-later, separately, possibly by someone else; the portability notes above are its starting point.
+The argument-passing hooks (`function_arg_info`) are the same from GCC 10 through 17, so this
+work's `-mos9call` (§4) would port nearly unchanged. It is implemented on GCC 11.1, the fork's
+baseline; a port to GCC 17 is a separate step (§12).
 
 ## 3. Microware C calling convention
 
@@ -134,8 +131,7 @@ Organization":
 ### What the compiler actually does
 
 [`test/os9c/testos9c.c`](test/os9c/testos9c.c) is a K&R C probe covering the cases the manual
-leaves open. Its header explains the test numbering. It has been compiled with two Microware
-compilers:
+leaves open. Its header explains the test numbering. It is compiled with two Microware compilers:
 
 | Output | Compiler | Command |
 |---|---|---|
@@ -145,8 +141,7 @@ compilers:
 Microware C 3.2's `-a` output is the compiler pass's (`c68`) output, from before the assembly
 optimizer (`o68`) runs: compiling with and without `-o` (optimizer off) gives byte-identical
 `.a` files. The calling convention and register-save masks come from `c68`, so the probe shows
-the right stage. Optimized code could only be inspected by compiling to `.r` and disassembling,
-which needs the ROF tooling (§6); a small research item for later.
+the right stage.
 
 Microware C 3.2 is the reference, since the CD-i libraries were built with it. Ultra C 2.5's
 compat mode agrees with it on argument passing and most return values. Its column has five
@@ -183,8 +178,8 @@ return value. The two compilers' struct-return conventions are incompatible with
 so are their float-return conventions, so no single scheme can work with both compilers for
 functions returning a struct or a `float`.
 
-The struct-return and float-return differences are **undocumented**. *Using Ultra C/C++* (chapter 2,
-"Compatibility with the Microware K&R C Compiler" and "Differences Between Compatibility Source
+The struct-return and float-return differences are **undocumented**. *Using Ultra C/C++* (chapter
+2, "Compatibility with the Microware K&R C Compiler" and "Differences Between Compatibility Source
 Mode and the Microware K&R C Compiler") calls compat mode "logically equivalent" to the K&R
 compiler, and lists the known differences:
 - `remote` storage class
@@ -218,19 +213,10 @@ the observed behaviour.
 
 ## 4. `-mos9call` design
 
-A new target option for the `m68k-elfos9` GCC, implemented in `gcc/config/m68k/`.
+A target option of the `m68k-elfos9` GCC, implemented in `gcc/config/m68k/`, and documented with
+the other OS-9 options in GCC's manual (m68k options).
 
 ### Which functions use it
-
-GCC function types do not record language linkage, so a function pointer cannot know whether
-its target is `extern "C"`. The only consistent rule the backend can apply is:
-
-> Under `-mos9call`, every call to, and definition of, a function of plain function type
-> (`FUNCTION_TYPE`) uses the OS-9 convention, whatever its linkage. That includes free functions,
-> static member functions, `extern "C"` functions, and all calls through plain function pointers.
-> Non-static member functions (`METHOD_TYPE`, which take `this`) and compiler-generated library
-> calls (libgcc helpers such as `__mulsi3` and soft-float routines) keep the normal stack
-> convention.
 
 The backend sees the function type on both sides (call sites, including indirect calls, and the
 function being compiled), so this is a simple type check. It needs no name-mangling heuristics.
@@ -243,12 +229,12 @@ Further scope rules:
   too: that's unavoidable, because a plain function pointer can't tell them apart from C
   functions, and harmless. The function-pointer conversion of a capture-less lambda has plain
   function type, so such lambdas can serve as callbacks for Microware libraries. The toolchain
-  currently builds C only, so this applies once C++ is enabled.
+  builds C only, so this applies once C++ is enabled (§12).
 - **Interrupt handlers:** functions with the `interrupt_handler` (or `interrupt`) attribute are
   always excluded; they keep their own entry and exit conventions.
 - **Per-function override:** two attributes allow mixing conventions within one program.
   `__attribute__((stackcall))` forces the stack convention under `-mos9call`, e.g. for runtime
-  entry points defined in libgcc or in assembly (§4, "Libraries").
+  entry points defined in libgcc or in assembly ("Libraries" below).
   `__attribute__((os9call))` selects the OS-9 convention without the flag, e.g. for declaring
   individual Microware library functions. Both are part of the function type, so they can be
   used in function-pointer declarations and typedefs, and pointers keep the right convention:
@@ -287,30 +273,22 @@ on the stack.
 - everything else on the stack, pushed right to left, caller pops; no stack space is reserved
   for register arguments
 - an aggregate on the stack takes a slot rounded up to a multiple of 4 bytes, and sits at the
-  *start* of it (padding after the data). GCC currently right-justifies aggregates smaller than 4
+  *start* of it (padding after the data). GCC normally right-justifies aggregates smaller than 4
   bytes (a 1-byte struct at offset 3 of its slot, a 2-byte one at offset 2, a 3-byte one at
-  offset 1), so `-mos9call` must pad them upward instead.
-  From 5 bytes up, GCC already matches. GCC's padding hook doesn't know the call's convention,
-  so the upward padding applies to all calls under `-mos9call`, and passing an aggregate smaller
-  than 4 bytes by value to a function of the other convention (a `stackcall` function under the
-  flag, an `os9call` one without it) is an error. A 1-byte struct is pushed by m68k's `pushqi1`
-  pattern, which normally stores the byte at offset 1; under the flag it stores it at offset 0.
+  offset 1); under `-mos9call` it pads them upward instead. From 5 bytes up, GCC already matches.
+  GCC's padding hook doesn't know the call's convention, so the upward padding applies to all
+  calls under `-mos9call`, and passing an aggregate smaller than 4 bytes by value to a function
+  of the other convention (a `stackcall` function under the flag, an `os9call` one without it) is
+  an error. A 1-byte struct is pushed by m68k's `pushqi1` pattern, which normally stores the byte
+  at offset 1; under the flag it stores it at offset 0.
 
 **Widened prototypes.** This applies only at the boundary with Microware-compiled code. Between
 GCC-compiled functions, prototyped `char`, `short` and `float` parameters, and `float` return
 values, work normally under `-mos9call`: both sides pass a `float` as 32 bits, in d0, d1 or a
 4-byte stack slot, and return it in d0.
 
-Microware C 3.2 functions are all defined K&R-style, so they receive their arguments in promoted
-form: `char` and `short` as `int`, `float` as `double`. By the C standard, a prototype is only
-compatible with such a definition if it uses those promoted types. Prototypes *for Microware C 3.2
-functions* should therefore use `int` (or `unsigned`) and `double`, never `char`, `short` or
-`float`: `extern "C" int f(double x, int c);` rather than `(float x, char c)`. GCC can't tell which
-declarations refer to Microware functions, so it doesn't warn about this; getting such
-prototypes right is up to whoever writes them.
-
-- **`float` parameters would break** when calling a Microware C 3.2 function: GCC passes a
-  prototyped `float` as 32 bits, while the callee expects a double.
+- **`float` parameters break** when calling a Microware C 3.2 function: GCC passes a prototyped
+  `float` as 32 bits, while the callee expects a double.
 - **`char`/`short` parameters happen to work:** m68k GCC widens them to a full 32-bit
   slot or register at call sites (`TARGET_PROMOTE_PROTOTYPES`), as Microware callers do, but
   `int` is the correct, portable form.
@@ -330,10 +308,8 @@ can't know that a function is variadic, so `printf(fmt, x)` is compiled like any
 in d0, `x` in d1). Microware C 3.2's variadic library functions must therefore expect that. How they
 read their arguments is undocumented. The usual K&R trick of walking from the address of the last
 named parameter can't work: Microware C 3.2's prologue stores d0/d1 below the frame pointer,
-separated from the stack arguments by the saved a5 and the return address. So they're presumably
-written in assembly, or use a library-specific mechanism. Code from that era supplied its own
-varargs support. For example, a CD-i developer's header set from the mid-1990s has only a
-placeholder `stdarg.h`, and its formatting routines rely on a separate, private `varargs.h`.
+separated from the stack arguments by the saved a5 and the return address. Code from that era
+supplied its own varargs support.
 
 Ultra C 2.5, which has prototypes, documents a different rule (*Ultra C/C++ Processor Guide*, 68K,
 "Passing Arguments to Functions"): named arguments follow the d0/d1 rules, and all variable
@@ -354,11 +330,6 @@ rules apply to *all* arguments, named or not, and the default argument promotion
   it's a declaration for functions implemented elsewhere, which is exactly the Microware case.
   In C, the unprototyped `f()` gives the same calls.
 
-This matches every Microware C 3.2 caller, and Microware C 3.2's variadic library functions too
-(confirmed by running them, see below). It deliberately differs from
-Ultra C 2.5: calling a variadic function compiled with it from `-mos9call` code would put the
-first unnamed arguments in the wrong place.
-
 Dual ANSI/K&R headers from that era show why this matters in practice. They wrap declarations in
 a prototype macro that expands to the full parameter list for an ANSI compiler and to `()` for
 Microware C 3.2. So GCC sees real variadic prototypes (`printf`-style functions, file creation
@@ -367,33 +338,20 @@ and expect positional arguments. Passing variadic calls like K&R calls is exactl
 calls to those functions work.
 
 **Callee side.** A variadic function *defined* with `-mos9call` must find its first arguments in
-d0/d1. The current m68k `va_list` (a pointer walking up the stack) can't do that, because the
-register arguments aren't contiguous with the stack ones. It needs a target-specific `va_list`,
-built with GCC's standard hooks (`TARGET_SETUP_INCOMING_VARARGS` to save d0/d1,
-`TARGET_BUILD_BUILTIN_VA_LIST`, `TARGET_EXPAND_BUILTIN_VA_START`, `TARGET_GIMPLIFY_VA_ARG_EXPR`),
-as x86-64 and PowerPC have:
+d0/d1. Only one case needs more than a stack pointer: a function with exactly one named argument,
+passed in d0 alone. Its first unnamed argument is in d1 if it's an int or pointer, and on the
+stack otherwise; every other unnamed argument is on the stack. So under `-mos9call`, `va_list` is
+an array of one structure (as on x86-64) with two pointers: `__stk`, the next stack argument, and
+`__d1`, a copy of d1 saved by the prologue (`TARGET_SETUP_INCOMING_VARARGS`), or null once d1 has
+been used or skipped, or if it can't hold an argument. `va_arg` (`TARGET_GIMPLIFY_VA_ARG_EXPR`)
+takes an int-sized scalar from `*__d1` if it's set, and anything else from the stack, clearing
+`__d1` either way. A second `va_start` and `va_copy` work, since `va_arg` never changes the saved
+copy. Without `-mos9call`, `va_list` stays a plain pointer, and an `os9call` variadic function is
+an error only in that one case.
 
-- the prologue of a variadic function saves d0/d1 to a register save area
-- `va_list` records the next argument's position, what the first argument was (int/pointer in
-  d0, double in d0:d1, or on the stack), and the next stack argument
-- `va_arg` applies the positional rules: position 0 takes an int or pointer from d0 or a double
-  from d0:d1, position 1 takes an int or pointer from d1 only if position 0 used d0 alone, and
-  everything else comes from the stack
-
-**As implemented.** Only one case needs more than a stack pointer: a function with exactly one
-named argument, passed in d0 alone. Its first unnamed argument is in d1 if it's an int or
-pointer, and on the stack otherwise; every other unnamed argument is on the stack. So under
-`-mos9call`, `va_list` is an array of one structure (as on x86-64) with two pointers: `__stk`, the
-next stack argument, and `__d1`, a copy of d1 saved by the prologue
-(`TARGET_SETUP_INCOMING_VARARGS`), or null once d1 has been used or skipped, or if it can't hold
-an argument. `va_arg` (`TARGET_GIMPLIFY_VA_ARG_EXPR`) takes an int-sized scalar from `*__d1` if
-it's set, and anything else from the stack, clearing `__d1` either way. A second `va_start` and
-`va_copy` work, since `va_arg` never changes the saved copy. Without `-mos9call`, `va_list` stays
-a plain pointer, and an `os9call` variadic function is an error only in that one case.
-
-Level 2 tests call GCC variadic functions the way Microware C 3.2 code does (ints and doubles
-in each position, two named arguments, a double first argument) and from GCC code, at every
-optimization level and with `-m68881`.
+Level 2 tests (§11) call GCC variadic functions the way Microware C 3.2 code does (ints and
+doubles in each position, two named arguments, a double first argument) and from GCC code, at
+every optimization level and with `-m68881`.
 
 **Supporting evidence from an earlier port.** The GCC 1.37.1 OS-9 port by T. Shinohara and
 A. Seyama (§3) ships a `varargs.h` "for GCC and MicroWare C". Its `va_dcl` declares the first
@@ -401,25 +359,20 @@ parameter as a `double`, followed by an `int`: by the Microware rules, a `double
 arrives in d0:d1, so the callee has d0 and d1 next to each other in memory, and `va_arg` walks
 through those 8 bytes before moving on to the stack arguments. That is consistent with the
 positional rule above for integral arguments: a K&R caller passes `printf(fmt, x)` as `fmt` in d0
-and `x` in d1. It doesn't cover every case (a double as the second argument is on the stack, not
-in d1), and that port's own callers put unnamed arguments on the stack, so it's supporting
-evidence rather than proof. It's also a simple model for GCC's callee side: save d0/d1, then
-continue with the stack arguments.
+and `x` in d1.
 
 **Confirmed by running the library:** with the CD-i `clib.l` converted by `rof2elf` (§6) and linked
 with `-mos9call` code, Microware C 3.2's `sprintf` and `sscanf` read their arguments correctly
 when called with this positional placement: `sprintf(buf, "%d %s %x %c", -7, "str", 255, 'z')`
 gives `-7 str ff z` (Level 3, §11), and a double as an unnamed argument is read from the stack,
-high half first: `sprintf(buf, "%d %x %x %d", 7, 1.5, 9)` gives `7 3ff80000 0 9`. Not yet
-checked: a double as the second argument of a variadic call (on the stack, not in d1), which needs
-a library function with one named parameter, such as `printf`, and so OS-9 for its I/O.
+high half first: `sprintf(buf, "%d %x %x %d", 7, 1.5, 9)` gives `7 3ff80000 0 9`.
 
 ### Return values
 
-- **Scalars need no change.** On `elfos9`, `m68kemb.h` (included after `m68kelf.h`) makes
-  `FUNCTION_VALUE` use `LIBCALL_VALUE`, so pointers already return in d0 and 64-bit values in d0:d1.
-  (Returning pointers in a0 only applies to the Linux and NetBSD targets.) Narrow values may stay
-  unwidened, because Microware callers widen them themselves.
+- **Scalars:** on `elfos9`, `m68kemb.h` (included after `m68kelf.h`) makes `FUNCTION_VALUE` use
+  `LIBCALL_VALUE`, so pointers return in d0 and 64-bit values in d0:d1. (Returning pointers in a0
+  only applies to the Linux and NetBSD targets.) Narrow values may stay unwidened, because
+  Microware callers widen them themselves.
 - **float** is returned as a float in d0, as Microware C 3.2 does. Ultra C 2.5 returns and expects
   a double in d0:d1 instead (§3, tests 28–29), but Microware C 3.2 is the reference. It's also
   the faster choice: the Ultra C 2.5 way costs a float-to-double conversion in the callee, and
@@ -431,27 +384,23 @@ a library function with one named parameter, such as `printf`, and so OS-9 for i
   d0 (float) and d0:d1 (double), as Ultra C 2.5 does even when it uses the FPU.
 - **`long double`, `_Complex` and vector types** are returned in memory, like structs (buffer
   address in a0). Vectors are passed on the stack too.
-- **Structs.** The two Microware compilers are incompatible here (§3), so `-mos9call` had to pick
-  one:
-  - **Microware C 3.2 (static buffer, PCC convention), not chosen:** the callee returns the address
-    of a static copy in d0. It matches the CD-i libraries' compiler, but isn't reentrant. GCC
-    supports it only through the compile-time macro `PCC_STATIC_STRUCT_RETURN` (`calls.c`,
-    `function.c`; used by `m68k/openbsd.h`), which can't be switched per option without core
-    changes.
-  - **Ultra C 2.5 (buffer address in a0), chosen:** reentrant, and close to what GCC already does.
+- **Structs:** the Ultra C 2.5 a0 convention. All aggregates are returned in memory, with the
+  buffer address in a0; the callee preserves a0. The two Microware compilers are incompatible here
+  (§3), and of the two:
+  - **Microware C 3.2's static buffer (PCC convention)** returns the address of a static copy in
+    d0. It isn't reentrant, and GCC supports it only through the compile-time macro
+    `PCC_STATIC_STRUCT_RETURN` (`calls.c`, `function.c`; used by `m68k/openbsd.h`), which can't
+    be switched per option without core changes.
+  - **Ultra C 2.5's buffer address in a0** is reentrant and close to what GCC already does:
     `m68kelf.h` sets the struct-value register to a0, but `m68kemb.h` sets
-    `DEFAULT_PCC_STRUCT_RETURN 0`, so GCC returns small structs that have an integer mode (1, 2, 4
-    or 8 bytes, suitably aligned) in d0/d1. Under `-mos9call`, the return-in-memory hook returns
-    true for all aggregates.
+    `DEFAULT_PCC_STRUCT_RETURN 0`, so GCC returns small structs that have an integer mode (1, 2,
+    4 or 8 bytes, suitably aligned) in d0/d1. Under `-mos9call`, the return-in-memory hook
+    returns true for all aggregates.
 
   For library interoperability the choice doesn't matter: the Microware C 3.2 headers declare no
   function that returns a struct or union by value, either directly or through a typedef, and
-  `div()`/`ldiv()` aren't provided at all. Other headers from that era checked so far show the
-  same. The choice only affects user code compiled by the two compilers calling each other.
-
-  **Decision:** the Ultra C 2.5 a0 convention. It's reentrant, close to what GCC already does,
-  and needs no changes to GCC's core. The Microware C 3.2 static buffer would only matter for
-  third-party Microware C 3.2 objects that return structs.
+  `div()`/`ldiv()` aren't provided at all. The choice only affects user code compiled by the two
+  compilers calling each other, and third-party Microware C 3.2 objects that return structs.
 
 ### Register preservation
 
@@ -459,36 +408,39 @@ Microware C 3.2 callers rely on d1 surviving calls, and callees preserve a0, a1 
 manual and the observed output), while d0 is never preserved. So:
 
 - An **os9call function (callee)** saves a0/a1 when it uses them or makes calls (register renaming
-  and peephole2, which run after the prologue, are kept off registers it didn't save: a review
-  found `-frename-registers` using unsaved a1 and fp1). That includes a0
-  when it carried the struct-return buffer address, as in Ultra C 2.5. It also saves d1 when it
-  uses d1 or makes calls, unless d1 carries an incoming argument or the return value; the incoming
-  argument state tells which. d0 needn't be saved (Microware C 3.2 never restores it; Ultra C 2.5
-  does, which is harmless). This reuses the `interrupt_handler` logic in `m68k_save_reg`.
+  and peephole2, which run after the prologue, are kept off registers it didn't save). That
+  includes a0 when it carried the struct-return buffer address, as in Ultra C 2.5. It also saves
+  d1 when it uses d1 or makes calls, unless d1 carries an incoming argument or the return value;
+  the incoming argument state tells which. d0 needn't be saved (Microware C 3.2 never restores
+  it; Ultra C 2.5 does, which is harmless). This reuses the `interrupt_handler` logic in
+  `m68k_save_reg`.
 - **FPU registers** (with `-m68881`): an os9call callee saves every FPU register it uses,
   including fp0/fp1, which GCC normally treats as scratch. Ultra C 2.5 does the same.
-- **GCC callers** keep values in a0/a1 across calls to os9call functions (implemented with GCC's
-  per-function ABIs: `TARGET_FNTYPE_ABI` gives prototyped os9call types an ABI whose clobbered
-  set lacks a0/a1, and `TARGET_INSN_CALLEE_ABI` finds a call's type from its MEM, which refers to
-  the declaration or, for an indirect call, the pointed-to function). d1 and fp0/fp1 still count
-  as clobbered. Calls to stack convention functions (`stackcall`, libcalls) and to unprototyped
-  functions keep the default ABI: GCC's own declarations of libcall functions have the type
-  `int ()`, which `-mos9call` would otherwise make os9call (found with `-fipa-ra`, which looks
-  them up). Microware's libraries were checked first: every global entry point of Microware
-  C 3.2's `clib.l`, `cdi.l` and `math.l` that GCC code could call preserves a0/a1 (assembly
-  routines with `movem` or `exg`; the exceptions are `setjmp`/`longjmp`, across which GCC keeps
-  nothing in registers, and internal helpers); `cdisys.l` has only equates. Tests: Level 1
-  (`os9call-keep-a0a1*.c`) and Level 2 (`tests/keep.c`, with a stack convention stub that
-  clobbers a0/a1).
-  Hand-written assembly called with the OS-9 convention must now really preserve a0/a1: four
-  of the Level 2 stubs didn't (`saves.S`, `returns.S`, `varargs.S`), which `tests/saves.c` caught
-  once callers relied on it; a review found one more (`modtests/far.S`), and stubs clobbering d1
-  without carrying it, all fixed. newlib's os9call `setjmp` preserves a0 as well.
-  With `-fipa-ra` (on at `-O2`), GCC finds a direct call's ABI from the called declaration
-  through `TARGET_FNTYPE_ABI`, without asking `TARGET_INSN_CALLEE_ABI`: any exclusion must be in
-  `m68k_fntype_abi`.
+- **GCC callers** keep values in a0/a1 across calls to *prototyped* os9call functions
+  (implemented with GCC's per-function ABIs: `TARGET_FNTYPE_ABI` gives prototyped os9call types an
+  ABI whose clobbered set lacks a0/a1, and `TARGET_INSN_CALLEE_ABI` finds a call's type from its
+  MEM, which refers to the declaration or, for an indirect call, the pointed-to function). d1 and
+  fp0/fp1 still count as clobbered. Calls to stack convention functions (`stackcall`, libcalls)
+  and to unprototyped functions keep the default ABI: GCC's own declarations of libcall functions
+  have the type `int ()`, which `-mos9call` would otherwise make os9call. With `-fipa-ra` (on at
+  `-O2`), GCC finds a direct call's ABI from the called declaration through `TARGET_FNTYPE_ABI`,
+  without asking `TARGET_INSN_CALLEE_ABI`, so any exclusion is in `m68k_fntype_abi`.
+  Microware's libraries satisfy this: every global entry point of Microware C 3.2's `clib.l`,
+  `cdi.l` and `math.l` that GCC code can call preserves a0/a1 (assembly routines with `movem` or
+  `exg`; the exceptions are `setjmp`/`longjmp`, across which GCC keeps nothing in registers, and
+  internal helpers); `cdisys.l` has only equates.
+- **Hand-written assembly** called with the OS-9 convention through a prototype must preserve
+  a0, a1 and d2–d7, and d1 unless it carries an argument or the result, as Microware's own
+  routines do. newlib's os9call `setjmp` preserves a0 as well.
 - **Tail calls (sibling calls)** from os9call functions are disabled. Otherwise a non-os9call
   callee could clobber a0/a1 (or d1) after the epilogue has restored them.
+
+**A value passed between calls in a register.** GCC decides the order in which it evaluates a
+call's arguments and which registers it uses in between, so a routine that leaves a value in a
+register for a later call to pick up (a pointer in a1 for the system call the next library
+function makes, say) works only with Microware's compilers, which happen to leave that register
+alone. The workaround is a file-scope register variable in the source files that use such a
+routine, for example in the routine's header:
 
 ### Options and special cases
 
@@ -499,15 +451,15 @@ manual and the observed output), while d0 is never preserved. So:
 | no `-ma6rel` | warning | Microware code expects a6 to point at the static storage area, and `-ma6rel` keeps a6 reserved for that |
 | nested functions (GCC extension) | allowed; error when a trampoline would be needed | Taking a nested function's address makes GCC build a trampoline that loads the static chain into a1 before the function can save it. A Microware caller of such a pointer (e.g. a `qsort` comparator) would lose a1. Direct calls are fine |
 | `-mrtd` (callee pops the arguments) | rejected with an error | the OS-9 convention has the caller pop the arguments |
-| frames of 32 KB or more | a1 is always saved in such functions, with a test | GCC's m68k epilogue then uses a1 as an index register while restoring registers. With `movem` that's safe once a1 is in the save mask (the address is computed before loading); the hazard is only in the register-by-register restore path, used when fewer registers are saved |
+| frames of 32 KB or more | a1 is always saved in such functions | GCC's m68k epilogue then uses a1 as an index register while restoring registers. With `movem` that's safe once a1 is in the save mask (the address is computed before loading); the hazard is only in the register-by-register restore path, used when fewer registers are saved |
 | `-fstack-limit-symbol` | rejected with an error (with `-m68020` and up) | GCC already disables `-fstack-limit-*` on the 68000/68070 (its check uses `TRAPcc`, a 68020 instruction). On the 68020, the check loads the limit into d0 when it isn't a simple constant (in practice always, under `-mpcrel`), clobbering argument 1. See also "Stack checking" below |
 | `-fstack-limit-register` with d0 or d1 | rejected with an error (with `-m68020` and up) | the limit register would collide with the argument registers |
 | `-fuse-cxa-atexit` (C++) | rejected with an error | the destructor passed to `__cxa_atexit` is a member function (`METHOD_TYPE`, stack convention), but it's called through a `void (*)(void *)` pointer, which is os9call, so `this` would arrive in d0. `thread_local` destructors always go this way, so they're unsupported |
 | `-mos9stkchk` | requires `-ma6rel` (error without it); skipped in `interrupt_handler` functions | `_stkcheck` and its limit live in Microware's a6 static area; interrupt handlers don't run on the process stack. See "Stack checking" |
 | `-malign-int`, `-fshort-enums`, `-fpack-struct` | warning | they change the data layout, which otherwise matches Microware C 3.2 exactly (§3) |
-| `-pg`, `-finstrument-functions` | rejected for now | the profiler call sequence clobbers a0, and `mcount` and the instrumentation hooks would have to preserve the incoming d0/d1 |
-| `-fprofile-arcs`, `-fprofile-generate` | rejected for now | they call libgcov (`__gcov_init`, the `__gcov_*_profiler` routines) through declarations with plain function types, so under the flag those calls would be os9call, but libgcov is built without it |
-| `__builtin_apply`, `__builtin_apply_args`, `__builtin_return` | unsupported for now (error, once per file) | they forward arguments by saving all possible argument and return registers; untested with d0/d1 arguments, and rarely used. As implemented, the error comes from the raw-mode hooks (`TARGET_GET_RAW_ARG_MODE`/`TARGET_GET_RAW_RESULT_MODE`), which only these built-ins use |
+| `-pg`, `-finstrument-functions` | rejected | the profiler call sequence clobbers a0, and `mcount` and the instrumentation hooks would have to preserve the incoming d0/d1 |
+| `-fprofile-arcs`, `-fprofile-generate` | rejected | they call libgcov (`__gcov_init`, the `__gcov_*_profiler` routines) through declarations with plain function types, so under the flag those calls would be os9call, but libgcov is built without it |
+| `__builtin_apply`, `__builtin_apply_args`, `__builtin_return` | unsupported (error, once per file) | they forward arguments by saving all possible argument and return registers; untested with d0/d1 arguments, and rarely used. The error comes from the raw-mode hooks (`TARGET_GET_RAW_ARG_MODE`/`TARGET_GET_RAW_RESULT_MODE`), which only these built-ins use |
 | other m68k targets | `-mos9call` is an error, the attributes are ignored with a warning | return values and struct return are only handled for `elfos9` (`M68K_OS9_TARGET` in `m68k-os9.h`) |
 
 **Callbacks and entry points.** Code called from outside GCC-compiled code must use the matching
@@ -519,7 +471,7 @@ convention, which `-mos9call` provides:
   handlers called by the runtime or OS-9 (signal and intercept handlers) are ordinary functions,
   so they use the OS-9 convention, as their callers must expect.
 
-The test plan covers each of these (§11).
+The tests cover each of these (§11).
 
 ### Stack checking
 
@@ -538,12 +490,11 @@ compilers use different, incompatible mechanisms:
 
 GCC's own stack-limit check (`-fstack-limit-*`) uses `TRAPcc`, a 68020 instruction, so GCC
 disables it on the 68000/68070. For CD-i programs, whose startup code (`cstart.r`) and libraries
-come from Microware C 3.2, the useful mechanism is Microware C 3.2's: GCC can emit the same
-`move.l #-N,d0` / `bsr _stkcheck` sequence on the 68000. It's enabled by a new opt-in option,
-**`-mos9stkchk`** (off by default, unlike Microware C 3.2), so GCC and Microware code share one
-stack limit and one overflow handler. The option needs Microware's `cstart.r` and `clib.l`, which
-provide `_stkcheck` and the limit it checks, so it depends on `rof2elf` (§6); the README's own
-`cstart.s` provides neither. It requires `-ma6rel` and skips `interrupt_handler` functions (see
+come from Microware C 3.2, the useful mechanism is Microware C 3.2's: **`-mos9stkchk`** (off by
+default, unlike Microware C 3.2) emits the same `move.l #-N,d0` / `bsr _stkcheck` sequence on the
+68000, so GCC and Microware code share one stack limit and one overflow handler. The option needs
+Microware's `cstart.r` and `clib.l`, which provide `_stkcheck` and the limit it checks, so it
+depends on `rof2elf` (§6). It requires `-ma6rel` and skips `interrupt_handler` functions (see
 "Options and special cases").
 
 GCC doesn't always allocate the locals in `link` (large frames use `link a5,#0` followed by
@@ -556,119 +507,116 @@ making calls, where Microware C 3.2 uses 64; that's harmless. When `N` ≤ 128, 
 enough.
 
 Microware C 3.2 saves registers first and checks afterwards, so whatever `_stkcheck` clobbers has
-already been saved. GCC checks first. Disassembling `_stkcheck` from `cstart.r` (converted with
-`rof2elf`, §6) settled its contract: `d0` is `-N` on entry; it adds `sp`, compares the result with
-`_stbot` (the lowest stack address so far) and returns if it isn't lower; otherwise it compares
-with `_mtop` (the limit), stores the new low point in `_stbot` and returns, or on overflow prints
-a message and exits. On the normal path it changes only `d0` and the flags. So GCC saves only
-`d0` around the check, and only when it carries an argument (`move.l d0,-(sp)` before,
-`move.l (sp)+,d0` after).
+already been saved. GCC checks first. `_stkcheck`'s contract, from a disassembly of `cstart.r`:
+`d0` is `-N` on entry; it adds `sp`, compares the result with `_stbot` (the lowest stack address
+so far) and returns if it isn't lower; otherwise it compares with `_mtop` (the limit), stores the
+new low point in `_stbot` and returns, or on overflow prints a message and exits. On the normal
+path it changes only `d0` and the flags. So GCC saves only `d0` around the check, and only when it
+carries an argument (`move.l d0,-(sp)` before, `move.l (sp)+,d0` after).
 
-**As implemented:** `-mos9stkchk` emits `moveq`/`move.l #-N,d0` and `bsr.w _stkcheck` (`jsr`
-without `-mpcrel`) at the start of the prologue, through an `unspec_volatile` insn in `m68k.md`.
-Level 1 tests check `N`, placement and the `d0` save; a Level 3 test (§11) runs checked code
-against Microware's own `_stkcheck` and watches `_stbot` go down as the stack grows. Variables
-that `_stkcheck` changes must be `volatile` in C code that reads them, since GCC can't see the
-change.
-
-`_stkcheck` also keeps a low-water mark of the stack pointer, which `freemem()` and `stacksiz()`
-report; those are only accurate if all code is built with stack checking.
+The sequence is `moveq`/`move.l #-N,d0` and `bsr.w _stkcheck` (`jsr` without `-mpcrel`), an
+`unspec_volatile` insn in `m68k.md`. Variables that `_stkcheck` changes must be `volatile` in C
+code that reads them, since GCC can't see the change. `_stkcheck` also keeps a low-water mark of
+the stack pointer, which `freemem()` and `stacksiz()` report; those are only accurate if all code
+is built with stack checking.
 
 ### Line ends: `-mos9newline`
 
 On OS-9 a text line ends with a carriage return, and in Microware C the escape `\n` *is* that
-carriage return: `'\n'` and `'\r'` are both 13. Microware C 3.2, compiled natively on a CD-i 605
-in CD-i Emulator, prints `nl=13 cr=13` for `printf("nl=%d cr=%d\n", '\n', '\r')`; the same
-source built with GCC prints `nl=10 cr=13`. Its `"\n"` reaches the terminal as a bare line feed,
-which OS-9 doesn't take as the end of a line, and Microware's `fgets` and `readln` read past it.
+carriage return: `'\n'` and `'\r'` are both 13. Microware C 3.2, compiled natively on a CD-i 605,
+prints `nl=13 cr=13` for `printf("nl=%d cr=%d\n", '\n', '\r')`; the same source built with GCC
+prints `nl=10 cr=13`. Its `"\n"` reaches the terminal as a bare line feed, which OS-9 doesn't take
+as the end of a line, and Microware's `fgets` and `readln` read past it.
 
 **`-mos9newline`** makes `\n` a carriage return (13) in GCC too, in character constants, string
 literals and `#if` alike, and defines `__OS9NEWLINE__`. A line feed is then `'\l'`, as in
-Microware C (C 3.2 on the 605 gives `'\l'` and `"\l"[0]` as 10), or `'\x0a'`/`'\012'`; without
-`-mos9newline`, `\l` stays an unknown escape (a pedantic warning, keeping the `l`).
-It is a separate option, **not implied by `-mos9call`**: the calling convention and the meaning
-of `\n` are independent, and code using newlib's I/O may want either. Code that passes text to
-Microware's C library, or writes OS-9 text files, needs it; code that must build either way can
-write `'\r'`, which is 13 in both compilers.
+Microware C (C 3.2 gives `'\l'` and `"\l"[0]` as 10), or `'\x0a'`/`'\012'`; without
+`-mos9newline`, `\l` stays an unknown escape (a pedantic warning, keeping the `l`). It is a
+separate option, **not implied by `-mos9call`**: the calling convention and the meaning of `\n` are
+independent, and code using newlib's I/O may want either. Code that passes text to Microware's C
+library, or writes OS-9 text files, needs it; code that must build either way can write `'\r'`,
+which is 13 in both compilers.
 
-**As implemented:** a `cr_newline` field in libcpp's `cpp_options`; `convert_escape` (in
-`libcpp/charset.c`) gives `\n` the host's carriage return instead of its line feed, and `\l` the
-line feed, before the conversion to the execution character set, so `-fexec-charset` still applies.
-The m68k `TARGET_CPU_CPP_BUILTINS` sets the field from `-mos9newline` and defines the macro. Wide
-character constants (`L'\n'`) follow too; raw strings have no escapes, so a line break in one stays
-a line feed. Level 1 tests: `os9newline-1.c` (the values with the option, `\l` included, in C and in
-`#if`, and the bytes of string literals in the assembler) and `os9newline-2.c` (unchanged without
-it, also under `-mos9call`; `\l` warns). Level 3: `mwtests/newline.c` checks the bytes Microware's
-`sprintf` writes for a GCC format with `\n` and `\l`, and on OS-9 itself writes two lines with `\n`
-that Microware's `fgets` reads back as two lines; built without the option it fails.
+| Kind | `\n` | `\r` | `\l` | `__OS9NEWLINE__` | Used by |
+|---|---|---|---|---|---|
+| `standard` (as `-mno-os9newline`) | 10 | 13 | unknown escape | undefined | GCC's default |
+| `microware` (as `-mos9newline`) | 13 | 13 | 10 | 1 | Microware C 3.2, Ultra C in its other modes: `m68k-os9-xcc`, `m68k-os9-ucc` |
+| `swapped` | 13 | 10 | unknown escape | 2 | Ultra C's strict ANSI mode (`-a`), where `\n` and `\r` still differ: `m68k-os9-ucc -a` |
 
-### Implementation points (`gcc/config/m68k/`)
+A field in libcpp's `cpp_options` selects the treatment; `convert_escape` (in
+`libcpp/charset.c`) gives the escapes their values before the conversion to the execution
+character set, so `-fexec-charset` still applies. The m68k `TARGET_CPU_CPP_BUILTINS` sets the
+field from the option and defines the macro. Wide character constants (`L'\n'`) follow too; raw
+strings have no escapes, so a line break in one stays a line feed.
 
-Insertion points in the GCC 11 tree (`gcc/config/m68k/`; line numbers approximate):
+### Other options for Microware C code
 
-| Where | GCC's purpose | What it must achieve |
-|---|---|---|
-| `m68k.opt` (next to `ma6rel`) | option definitions | new target masks for `-mos9call` and (later) `-mos9stkchk`, both negatable (`-mno-os9call`); also document them in `gcc/doc/invoke.texi`, m68k options |
-| `m68k.h` ~60, `TARGET_CPU_CPP_BUILTINS` | predefined macros | define `__OS9CALL__` under `-mos9call` |
-| `m68k.h` ~495, `CUMULATIVE_ARGS` | per-call argument-scanning state | remember whether the call uses the OS-9 convention, the argument position, and where arg 1 went (d0, d0:d1 or the stack) |
-| `m68k.h` ~498, `INIT_CUMULATIVE_ARGS` | runs per call site and for the function being compiled | decide the convention from the function type and its `stackcall`/`os9call` attribute; libcalls (no type), `METHOD_TYPE`, `interrupt_handler` functions keep the stack convention; built-in declarations get it from their `stackcall` type (see "Libraries"). One predicate, given the function type, makes this decision for every hook. (`m68k.h` names the 4th argument of `INIT_CUMULATIVE_ARGS` `INDIRECT`, but `calls.c` passes the function declaration.) |
-| `m68k.h` ~491, `FUNCTION_ARG_REGNO_P` | which registers can carry arguments | admit d0 and d1. This is global: it feeds dataflow entry definitions, alias analysis, if-conversion and loop invariants. As implemented, it admits them under `-mos9call` or once an `os9call` attribute has been applied in the translation unit, so code using neither is unchanged (Level 0 confirms it) |
-| `m68k.c` ~1447, `m68k_function_arg` | where an argument goes (register, or stack) | the positional rules of §3/§4, applied to named and unnamed arguments alike (variadic calls behave like unprototyped calls) |
-| `m68k.c` ~1453, `m68k_function_arg_advance` | updates the state after each argument | track position and register use; stack byte counting must keep working |
-| `m68k.c`, `TARGET_FUNCTION_ARG_PADDING` (new) | how arguments smaller than their slot are padded | under `-mos9call`, pad aggregates upward (data at the start of the slot); `pushqi1` in `m68k.md` follows it for 1-byte structs |
-| `m68k.c` ~294/~5928, `TARGET_RETURN_IN_MEMORY` | which return types go through memory | defined under `M68K_HONOR_TARGET_STRICT_ALIGNMENT`, which is 1 by default (only `linux.h` sets 0), so the hook is active on `elfos9`; under `-mos9call`, all aggregates, `long double` and `_Complex` types (the Ultra C 2.5 a0 convention, §4) |
-| `m68k.c` ~917, `m68k_save_reg` | which registers the prologue saves | a0/a1 when used or non-leaf; d1 unless it carries an incoming argument or the return value (d0 never); model it on the `interrupt_handler` branch, using `crtl->args.info` for incoming arguments |
-| `m68k.c` ~1401, `m68k_ok_for_sibcall_p` | whether a tail call is allowed | refuse for os9call functions |
-| `m68k.c`, `m68k_epilogue_uses` (`EPILOGUE_USES`) | which registers count as live at function exit | under the OS-9 convention, every call-clobbered register except d0 (as for interrupt handlers); otherwise the epilogue's restores of d1, a0 and a1 are deleted as dead (found by the Level 1 tests) |
-| `m68k.c`, `m68k_attribute_table` | target attributes | add `stackcall` and `os9call` as *type* attributes (like x86's `stdcall`, unlike m68k's declaration-only `interrupt*` attributes), with `affects_type_identity` set, so they can appear in function-pointer types and typedefs |
-| `m68k.c`, attribute handlers (C++ mangling) | how function types appear in C++ mangled names | nothing to add for mangling itself (the C++ front end mangles identity-affecting type attributes as written); the handlers drop the attribute that matches the flag's default (`os9call` under `-mos9call`, `stackcall` without it), so each type has one mangling |
-| `m68k.c`, `TARGET_COMP_TYPE_ATTRIBUTES` (new) | whether two function types' attributes are compatible | function types with different *effective* conventions are incompatible (no attribute means `os9call` under `-mos9call` and `stackcall` without it), so assigning between them is diagnosed, and in C++ they're distinct types |
-| `m68k.c`, `TARGET_FUNCTION_VALUE` (new) | where return values go | for os9call functions, all values in d0 / d0:d1, float and double too, even with `-m68881`; otherwise the existing `FUNCTION_VALUE` macro (on `elfos9`, `m68kemb.h` maps it to `LIBCALL_VALUE`). It has to be the hook, not the macro: the macro only gets the declaration, so indirect calls would miss the convention (found by the implementation review). `m68k_libcall_value` stays unchanged |
-| `m68k.c`, `m68k_option_override` | option sanity checks | the option rules in "Options and special cases": reject `-mshort`, `-mrtd`, `-pg`, `-finstrument-functions`, `-fprofile-arcs`, `-fprofile-generate`, `-fuse-cxa-atexit`, `-fstack-limit-symbol` and `-fstack-limit-register` with d0/d1, and `-mos9stkchk` without `-ma6rel`; warn for `-m68881`, missing `-ma6rel`, and the layout-changing `-malign-int`, `-fshort-enums` and `-fpack-struct` |
-| `m68k.c`, `TARGET_INSERT_ATTRIBUTES` (new) | adds attributes to every declaration as it's created, GCC's built-in declarations included | under `-mos9call`, add `stackcall` to declarations and typedefs of the names listed in "Libraries" that have no convention attribute: built-ins (by library name), headers, definitions and K&R redeclarations alike |
-| `m68k.c`, `TARGET_SETUP_INCOMING_VARARGS` (new) | called for each variadic function definition | until the callee side exists, an error for variadic functions with the OS-9 convention |
-| `m68k.c` ~7065, `m68k_trampoline_init` | builds a nested function's trampoline | an error for nested functions with the OS-9 convention |
-| `m68k.c`, `TARGET_GET_RAW_ARG_MODE`/`TARGET_GET_RAW_RESULT_MODE` (new) | register modes for `__builtin_apply_args`, `__builtin_apply`, `__builtin_return` | an error under `-mos9call`, once per file |
-| `m68k.c` ~1036, `m68k_expand_prologue` (later, `-mos9stkchk`) | emits the prologue | the `_stkcheck` sequence of "Stack checking", at the start, with its register saves; not in `interrupt_handler` functions |
+- **`-mbuiltin=stackcall|os9call`** chooses the convention of the runtime functions libgcc also
+  calls ("Libraries" below).
+- **`-mos9math`**: floating point through OS-9's math module, as Microware C's `-x` ("Floating
+  point" below).
+- **The `remote` attribute** places data beyond the 64 KB a6 window (§6, "Data beyond 64 KB").
+- **Predefined names:** GCC on `m68k-elfos9` predefines what Microware C 3.2's driver does: `_OSK`,
+  `_MPF68K` and `_BIG_END` (and `_MPF68020`, `_FPF881` for those CPUs), and as its `cpp` does
+  `OSK` and `mc68000` (`OSK` also as `__OSK`/`__OSK__`, and only those in strict ISO C), so
+  Microware's `stdio.h`, which tests `OSK`, works unchanged. Ultra C 2.5 in compat mode also
+  defines `_UCC` and its revision, and `_FPF881` even for the 68000; `m68k-os9-ucc` defines
+  Ultra C's names.
 
-Background in the GCC internals manual: "Passing Arguments in Registers", "How Scalar Function
-Values Are Returned", "How Large Values Are Returned", "Function Entry and Exit".
+### Floating point: `-mos9math`
 
-Implementation phases, in order. Each is checked against `test/os9c/testos9c-cc32.a`, except struct
-return, which follows Ultra C 2.5 and is checked against `test/os9c/testos9c-ucc25.a`:
-1. **option, attributes, state and init:** the `mos9call` option and its option checks,
-   `__OS9CALL__`, the `stackcall`/`os9call` type attributes with type compatibility and C++
-   mangling, `CUMULATIVE_ARGS` and the convention decision, the `stackcall` retyping of built-in
-   declarations and of user redeclarations, and the errors for trampolines and
-   `__builtin_apply`. No change without the flag.
-2. **argument placement**, including upward padding of small aggregates, and the error for
-   variadic definitions
-3. **callee register saves**, including FPU registers with `-m68881`
-4. **return values:** struct return (all aggregates in memory, buffer address in a0), float and
-   double in d0 / d0:d1 also with `-m68881`, `long double` and `_Complex` in memory
-5. **tail calls** disabled from os9call functions (as implemented, done together with phase 3: once
-   the epilogue restores d1, a0 and a1, a tail call would restore d1 after loading the outgoing
-   arguments; tail calls from stack-convention functions to os9call ones are refused too, since
-   argument and return registers differ)
+Without its `-x`, Microware C calls the floating-point routines of `math.l` (`_T$DCmp` and the
+like); with it, it traps to OS-9's math module (`trap #15`), which a CD-i player has in its
+system ROM. Microware code compiled either way links with GCC code (`math.l` goes through
+`rof2elf`). C 3.2's `xcc -bp` shows what `-x` is: without it, the driver gives `c68` `-t`, which
+turns each trap into a call of `math.l`'s `_T$DAdd` and the like, and links `clibn.l` and `math.l`;
+with it, `c68` emits the `tcall`s and the driver links `clib.l`. The cross `xcc -a -x` and the
+native `cc -a -x` give identical assembly. Ultra C's `-x` is different: it emits 68881
+instructions for an F-line emulator.
 
-A predefined macro, `__OS9CALL__`, tells headers whether `-mos9call` is in effect (see "Headers
-for Microware libraries").
+GCC's own floating point is libgcc's soft-float (`lb1sf68`), in the program, unless
+**`-mos9math`**:
+
+- **Inline traps:** without an FPU, GCC emits the traps itself, as C 3.2 does with `-x`. The
+  backend's float expanders (`add`, `sub`, `mul`, `div`, the conversions between float, double,
+  long and unsigned long, and `cbranch`) load the operands into fixed registers and emit
+  `trap #15` and the function code (`T$DAdd` = 14 …): doubles in d0:d1 and d2:d3, floats in d0
+  and d1, the result in d0:d1 or d0, a comparison's in the condition codes. C 3.2 does float
+  arithmetic in double. With an FPU (`-m68881`) the FPU is used and `-mos9math` changes nothing.
+- **Clobbers:** d1 and d2:d3 count as destroyed by every double operation and conversion. The
+  *OS-9 Technical Manual* (chapter 6) promises unchanged registers only for `T$DCmp` (d0–d3) and
+  `T$FCmp` (d0/d1), and on the CD-i 605 `tan`, `acos` and `T$DAdd` do change d2/d3. Microware C
+  3.2 assumes no more: with `-x`, before and after `o68`, it reloads d2:d3 before every double
+  operation and keeps register variables in d4–d7 only.
+- **Compares** are the math module's (`T$DCmp`, `T$FCmp`) whether or not NaNs are honoured, as in
+  Microware C: the module knows no NaNs, and its errors end the program rather than make one, so
+  NaNs only come from outside (bit patterns, `nan()`); only `isnan` and `isunordered` (ORDERED and
+  UNORDERED) call libgcc's `__unord<mode>2`.
+- **Errors** (division by zero, overflow, 0/0, out-of-range conversions, domain errors) raise
+  TRAPV and end the program (`000:107`), as in Microware C. `pow(0, -1)` returns 0.
+- **`libos9math`** (newlib's `libgloss/m68k`) is linked before libgcc. Its versions of the
+  soft-float entry points (`__adddf3` … `__divsf3`, the comparisons, `__unord*`, and the
+  conversions between float, double, long and unsigned long) call the math trap, for code that
+  still calls them (code compiled without `-mos9math`, and libgcc's own internal calls); its
+  comparisons check for NaNs. A constructor links the handler (`F$TLink`), as `cstart.r` does on
+  the first trap. libgcc's exception flags (`_fpCCR`) aren't kept, and the 64-bit conversions stay
+  in libgcc.
+- **`math.h`:** GCC defines `__OS9MATH__`, and newlib's `math.h` includes `<machine/os9math.h>`,
+  whose `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `log`, `log10`, `sqrt`, `exp` and `pow` are
+  inline traps (`gnu_inline`, so libm's stay for their addresses), with the precision 1E-14 in
+  d2:d3 (`pow`: d4:d5), as C 3.2's own `clib.l` passes it; the precision registers are declared
+  read-write. A test program of these functions shrinks from 60 KB to 38 KB.
 
 ### Libraries
 
-If application code is built with `-mos9call`, every library it calls through ordinary function
-calls must use the same convention: newlib (`printf`, …) and, for C++, libstdc++/libsupc++. That
-means building them with the flag, as a multilib or by making the convention the default for the
-target. newlib is configured separately in the `Dockerfile`, with its own `CFLAGS_FOR_TARGET`,
-so adding the flag there is easy. These cases need care:
+Application code built with `-mos9call` needs every library it calls through ordinary function
+calls built with the same convention: newlib (`printf`, …) and, for C++, libstdc++/libsupc++.
+These cases need care:
 
-- **libgcc must be built *without* `-mos9call`.** The compiler calls its helpers (`__mulsi3`,
+- **libgcc is built *without* `-mos9call`.** The compiler calls its helpers (`__mulsi3`,
   soft-float routines, …) as libcalls, which keep the stack convention, but their *definitions*
-  are ordinary functions and would switch convention if compiled with the flag. The `Dockerfile`
-  passes `CFLAGS_FOR_TARGET` to the GCC build, and so to libgcc, so the flag can't simply go there.
-  A `mos9call` multilib, or making the convention the default, would also build libgcc and
-  libgcov with it, so libgcc's target makefile fragment adds `-mno-os9call` (e.g. through
-  `HOST_LIBGCC2_CFLAGS`). `MULTILIB_REUSE` can then avoid building libgcc twice.
+  are ordinary functions and would switch convention if compiled with the flag. libgcc's target
+  makefile fragment (`libgcc/config/m68k/t-elfos9`) adds `-mno-os9call` in every multilib.
 - **Which functions keep the stack convention.** The rule: a function is `stackcall` if its
   definition, or one of its callers, is outside `-mos9call` code (libgcc, assembly). Checked with
   `nm -u` on the `elfos9` `libgcc.a`, that gives:
@@ -678,7 +626,7 @@ so adding the flag there is easy. These cases need care:
     unwinder and emulated TLS)
   - entry points defined in libgcc or libatomic (`_Unwind_Resume`, `__atomic_*`, …), including the
     complex multiply and divide helpers (`__mulsc3` … `__divxc3`), which GCC also calls through
-    built-in declarations (found by the implementation review)
+    built-in declarations
   - `abort` (also called by libgcc) takes no arguments and never returns, so either convention
     works; it's listed for type consistency
 
@@ -688,15 +636,12 @@ so adding the flag there is easy. These cases need care:
 - **Microware's `clib` instead of newlib: `-mbuiltin=os9call`.** The list above is right for newlib.
   Microware's `clib.l` defines `memcpy`, `memset`, `strlen`, `malloc`, `free` and `abort` with the
   OS-9 convention, so a program linked against it needs them as os9call, including GCC's own
-  `memcpy` calls for block moves (found when linking `rof2elf`-converted `clib`; see §6).
-  `-mbuiltin=os9call` selects that; `-mbuiltin=stackcall` is the default. libgcc's own entry
-  points keep the stack convention either way; its DWARF unwinder and emulated TLS, which call
-  these functions, can't be used with `-mbuiltin=os9call`.
-- **Runtime entry points called through built-in declarations.** GCC calls some of these
-  functions through its own built-in declarations, which have a real function type, so
-  `-mos9call` callers would use the OS-9 convention for them. Marking their *definitions*
-  `stackcall` wouldn't help, because callers only see the built-in declaration.
-- **One mechanism for all declarations (as implemented).** GCC passes every declaration through
+  `memcpy` calls for block moves. `-mbuiltin=os9call` selects that; `-mbuiltin=stackcall` is the
+  default. libgcc's own entry points keep the stack convention either way; its DWARF unwinder and
+  emulated TLS, which call these functions, can't be used with `-mbuiltin=os9call`.
+- **One mechanism for all declarations.** GCC calls some of these functions through its own
+  built-in declarations, which have a real function type, so marking their *definitions*
+  `stackcall` wouldn't help. Instead, GCC passes every declaration through
   `TARGET_INSERT_ATTRIBUTES` when it's created, including its own built-in declarations (both
   `__builtin_memcpy` and the plain `memcpy`, and `_Unwind_Resume`, which is created late, in
   `build_common_builtin_nodes`). Under `-mos9call` the backend adds `stackcall` there to every
@@ -706,41 +651,57 @@ so adding the flag there is easy. These cases need care:
   wrong convention). So headers, built-ins, definitions and function pointers (`&memcpy`) all
   agree, and GCC keeps treating the functions as built-ins. newlib's headers and C definitions
   need no changes, and its m68k assembly versions stay as they are.
-- **Other assembly sources don't follow the flag.** newlib's m68k `setjmp.S` read its arguments
-  from the stack; it has os9call variants now (below).
-
-**As implemented:** the `m68k-elfos9` GCC has two multilibs, the default and `-mos9call`
-(directory `os9call`; `m68k/t-elfos9`, replacing the per-CPU `t-mlibs`, which the build didn't
-use), and GCC and newlib are configured with `--enable-multilib`. libgcc gets `-mno-os9call` in
-both (`libgcc/config/m68k/t-elfos9`), so the two `libgcc.a` are the same. newlib's `setjmp.S` has
-an os9call variant (arguments in d0/d1 when `__OS9CALL__` is defined), on branch
-`newlib-4.1.0-os9-compat` of `cdifan/newlib-cygwin`; with `setjmp`/`longjmp` os9call in both
-libraries, `-mbuiltin=os9call` programs (Microware's `clib`) agree too. `make check-newlib` in
-`test/abi-exec` runs `nltests/` in both multilibs: `sprintf`, `sscanf`, `strtol`, `qsort` calling
-back, a `va_list` passed to `vsnprintf`, `setjmp`/`longjmp` and `malloc`, as OS-9 modules, since
-newlib's stdio makes programs larger than 32 KB (elf2mod's jump table). The test linker script
-now lists `.rodata` with `.text` in one statement, so each object's constants follow its code
-within PC-relative reach. Building newlib this way found two long-standing bugs of `-ma6rel`,
-fixed on branches of their own for Murachue's fork (see "Branches" in §10):
-- read-only variables that hold addresses (`const char *const tbl[]`, newlib's locale tables)
-  were addressed PC-relative, though they need relocating and GCC places them in a writable
-  section; now they're data, addressed relative to a6, decided by the type, which every
-  translation unit sees: read-only variables whose type contains pointers, structures or unions
-  (also incomplete ones: an opaque `struct ops` may hold function pointers, found by a review)
-  or that are volatile. The cost: read-only structure tables use the 64 KB a6 window instead of
-  the code area. A read-only variable placed in data for a reason its type doesn't show (an
-  address in an integer, a common symbol) is a6-relative in its own translation unit, and GCC
-  warns, since others can't know
-- libgcc's soft-float routines reached `_fpCCR` through the GOT (below, §12); now relative to a6,
-  with `-ma6rel` defining `__A6REL__`
-- **libsupc++** (built with the flag) calls `_Unwind_*` through the declarations in `unwind.h`,
+- **libsupc++** (C++, once enabled) calls `_Unwind_*` through the declarations in `unwind.h`,
   which aren't built-ins. Calls also go the other way: the unwinder calls the personality routine
   (`__gxx_personality_v0`) and the exception cleanup function through function pointers. The
   same mechanism covers these: typedefs whose names start with `_Unwind_` (such as
   `_Unwind_Personality_Fn`) get `stackcall` on their function type, and so do declarations of
   `_Unwind_*` functions and of the personality routines.
-- **Variadic functions** can be defined under `-mos9call` (see "Variadic functions"), so newlib's
-  `printf` family can be built with the flag.
+
+**Multilibs.** The `m68k-elfos9` GCC has two multilibs, the default and `-mos9call` (directory
+`os9call`; `m68k/t-elfos9`, replacing the per-CPU `t-mlibs`), and GCC and newlib are configured
+with `--enable-multilib`; the two `libgcc.a` are the same. newlib's `setjmp.S` has an os9call
+variant (arguments in d0/d1 when `__OS9CALL__` is defined); with `setjmp`/`longjmp` os9call in
+both libraries, `-mbuiltin=os9call` programs (Microware's `clib`) agree too. Variadic functions
+can be defined under `-mos9call`, so newlib's `printf` family is built with the flag. There is no
+FPU multilib: `-m68020 -m68881` programs link the 68000 newlib (soft-float, and the non-68881
+`setjmp`).
+
+**newlib's OS-9 runtime**, in `libgloss/m68k`, built for `m68k-elfos9` in both multilibs:
+- `os9-crt0.o`: argc/argv from the parameter string, with the module's name as `argv[0]`;
+  constructors; `exit(main(...))`
+- `libos9.a`: newlib's system calls through OS-9's: `I$Read`/`I$ReadLn`, `I$Write`/`I$WritLn`,
+  `I$Open`/`I$Create`, `I$Close`, `I$Seek`, `I$GetStt`/`I$SetStt`, `I$Delete`, `F$Exit`, `F$ID`,
+  `F$Send`, `F$Time`. On terminals (SCF paths) a line feed is written as a carriage return, with
+  `I$WritLn`, and read back as a line feed; files are unchanged
+- `os9.ld` and `os9.specs`, which adds `-mpcrel -ma6rel`, the startup,
+  `-q --no-check-sections -Tos9.ld` and `-los9`. Opt-in (`-specs=os9.specs`) rather than driver
+  defaults, so code built without it stays as before (Level 0)
+- the heap lies between the data and the stack: newlib's `malloc` needs it contiguous and growing
+  upwards, and `F$SRqMem` hands out blocks from the top of memory down. The module reserves
+  `__os9_heap` bytes (16 KB) and the shell's `#size` modifier adds more (`prog #64k`)
+- the module header comes from `__os9_*` symbols that `os9.ld` provides with defaults (8 KB of
+  stack, edition 1), which a program or `--defsym` overrides; `--defsym __jmptbl_size=N`
+  reserves `elf2mod`'s jump table
+
+**`m68k-os9-gcc`** (in m68k-os9-tools, with `m68k-os9-` links to the binutils) compiles and links
+with `-specs=os9.specs`, then runs `elf2mod`; a program too large for 16-bit calls is linked
+again with the jump table size `elf2mod` asks for; `-Wm,` passes options to `elf2mod`. GCC's
+driver can't run a tool after linking, hence the wrapper.
+
+**Two fixes to `-ma6rel`**, found by building newlib this way, are on branches of their own for
+Murachue's fork (§10, "Repositories and branches"):
+- read-only variables that hold addresses (`const char *const tbl[]`, newlib's locale tables)
+  were addressed PC-relative, though they need relocating and GCC places them in a writable
+  section; now they're data, addressed relative to a6, decided by the type, which every
+  translation unit sees: read-only variables whose type contains pointers, structures or unions
+  (also incomplete ones: an opaque `struct ops` may hold function pointers) or that are volatile.
+  The cost: read-only structure tables use the 64 KB a6 window instead of the code area. A
+  read-only variable placed in data for a reason its type doesn't show (an address in an integer,
+  a common symbol) is a6-relative in its own translation unit, and GCC warns, since others can't
+  know
+- libgcc's soft-float routines reached `_fpCCR` through the GOT; now relative to a6, with
+  `-ma6rel` defining `__A6REL__`
 
 ### Headers for Microware libraries
 
@@ -797,6 +758,31 @@ int _errmsg _OS9PROTO((int nerr, char *msg, ...));
 `_OS9PROTO` is this project's own pattern for headers that declare Microware library functions.
 Dual ANSI/K&R headers from the era used similar prototype macros, without the attribute.
 
+### Implementation points (`gcc/config/m68k/`)
+
+Where the convention lives in the GCC 11 tree (`gcc/config/m68k/`, unless noted):
+
+| Where | GCC's purpose | What it does under the OS-9 convention |
+|---|---|---|
+| `m68k.h`:<br>`CUMULATIVE_ARGS`<br>`INIT_CUMULATIVE_ARGS` | per-call argument-scanning state | whether the call uses the OS-9 convention (one predicate, given the function type and its attribute; libcalls, `METHOD_TYPE` and `interrupt_handler` functions keep the stack convention), the argument position, and where arg 1 went |
+| `m68k.h`:<br>`FUNCTION_ARG_REGNO_P` | which registers can carry arguments | d0 and d1, under `-mos9call` or once an `os9call` attribute has been applied in the translation unit, so code using neither is unchanged (Level 0) |
+| `m68k_function_arg`<br>`m68k_function_arg_advance` | where an argument goes | the positional rules, named and unnamed arguments alike |
+| `TARGET_FUNCTION_ARG_PADDING` | padding of arguments smaller than their slot | aggregates upward; `pushqi1` in `m68k.md` follows it |
+| `TARGET_RETURN_IN_MEMORY`<br>`TARGET_FUNCTION_VALUE` | return values | all aggregates, `long double` and `_Complex` in memory (a0); other values in d0 / d0:d1, also with `-m68881`. A hook rather than the `FUNCTION_VALUE` macro, which only gets the declaration and would miss indirect calls |
+| `m68k_save_reg`<br>`m68k_epilogue_uses` | the prologue's saves, live registers at exit | a0/a1 when used or non-leaf; d1 unless it carries an incoming argument or the return value; every call-clobbered register but d0 live at exit, so the epilogue's restores aren't deleted as dead |
+| `TARGET_FNTYPE_ABI`<br>`TARGET_INSN_CALLEE_ABI` | per-function ABIs | a0/a1 kept across calls to prototyped os9call functions |
+| `m68k_ok_for_sibcall_p` | tail calls | refused from os9call functions, and from stack-convention functions to os9call ones |
+| `m68k_attribute_table`<br>`TARGET_COMP_TYPE_ATTRIBUTES` | target attributes, type compatibility | `stackcall`, `os9call` and `remote` as type attributes with `affects_type_identity`; different *effective* conventions are incompatible types; the handlers drop the attribute that matches the flag's default |
+| `TARGET_INSERT_ATTRIBUTES` | attributes added to declarations | `stackcall` on the runtime functions of "Libraries" |
+| `TARGET_SETUP_INCOMING_VARARGS`<br>`TARGET_BUILD_BUILTIN_VA_LIST`<br>`TARGET_EXPAND_BUILTIN_VA_START`<br>`TARGET_GIMPLIFY_VA_ARG_EXPR` | variadic functions | the `__stk`/`__d1` `va_list` |
+| `m68k_trampoline_init`<br>`TARGET_GET_RAW_ARG_MODE`<br>`TARGET_GET_RAW_RESULT_MODE` | trampolines, `__builtin_apply` | errors |
+| `m68k_expand_prologue` | the prologue | the `_stkcheck` sequence (`-mos9stkchk`) |
+| `m68k_option_override` | option checks | the rules of "Options and special cases" |
+| `libcpp/charset.c` | escapes | `-mos9newline` |
+
+Background in the GCC internals manual: "Passing Arguments in Registers", "How Scalar Function
+Values Are Returned", "How Large Values Are Returned", "Function Entry and Exit".
+
 ## 5. How dependent is the toolchain on ELF?
 
 Very little of it is in the compiler. GCC never writes object files: `cc1` emits assembly text,
@@ -819,27 +805,25 @@ The ELF-specific things in the target headers are:
 The code generator itself barely cares, and the fork's own changes concern addressing, not the
 object format.
 
-Options for working with Microware object files (ROF), roughly easiest first:
+The ways to work with Microware object files (ROF):
 
-1. **`rof2elf`**: convert Microware `.r`/`.l` files to ELF and keep linking with GNU `ld` +
-   `elf2mod`. This brings Microware and CD-i libraries into GCC programs.
-2. **`elf2rof`**: convert GCC objects to ROF for the Microware linker `l68`, so GCC code can go
-   into Microware-linked programs.
+1. **`rof2elf`** (chosen): convert Microware `.r`/`.l` files to ELF and keep linking with GNU
+   `ld` + `elf2mod`. This brings Microware and CD-i libraries into GCC programs.
+2. **`elf2rof`** (chosen): convert GCC objects to ROF for Microware's linker `l68`, so GCC code
+   can go into Microware-linked programs.
 3. **A ROF backend in BFD**, making `as`/`ld`/`objdump` speak ROF natively. Cleanest, but the
    most work.
-4. **Make GCC emit Microware `r68` assembly** (`psect`/`vsect`, `dc`/`ds`, no `%`). This is the
-   only option touching the compiler. It ties builds to Microware's assembler and linker, and
-   breaks GNU-syntax inline asm.
+4. **Make GCC emit Microware `r68` assembly** (`psect`/`vsect`, `dc`/`ds`, no `%`). This ties
+   builds to Microware's assembler and linker, and breaks GNU-syntax inline asm. Not chosen for
+   the compiler; `gastor68` translates GCC's output to r68 syntax where Microware's assembler
+   must take it (§6, "Drop-ins for Microware's tools").
 
 ## 6. ROF interoperability: `rof2elf` and `elf2rof`
-
-Goal: both directions, `rof2elf` first (most important).
 
 ### The ROF format
 
 From the *OS-9 Assembler/Linker User Manual*, chapter 3 ("Relocatable Program Sections"), section
-"Relocatable Object File Format".
-An ROF has eight sections:
+"Relocatable Object File Format". An ROF has eight sections:
 - the header
 - external definitions
 - object code
@@ -872,22 +856,19 @@ An ROF has eight sections:
 | 2-byte data references (a6-relative) | `R_68K_16` | must agree with the -0x8000 bias in the linker script |
 | 4-byte references | `R_68K_32` | in `.data`: pointers, which `elf2mod` relocates at load time. In code: link-time constants, i.e. a6-relative data offsets (`move.l #_iob,a1` then `adda.l a6,a1` in `cstart.r`) or equates, which come out right with the -0x8000 data bias; `elf2mod` accepts these |
 | relative 1/2/4 bytes | `R_68K_PC8`/`PC16`/`PC32` | |
-| negative references | `R_68K_PC32` when paired | an external reference paired with a negated reference to the same ROF's code is a PC-relative value (`cstart.r`'s `jsr (pc,dN.l)` calls); other negative references are rejected, unless only equates are involved, which `rof2elf` folds in (with `-e sys.l`) |
 | common symbols | ELF COMMON | |
 | addend in the instruction bytes | RELA addend | |
-| mainline header (type, attributes, edition, stack, entry) | absolute and code symbols `__os9_tylan`, `__os9_attrev`, `__os9_edition`, `__os9_stack`, `__os9_entry`, `__os9_trapent` | `elf2mod` doesn't use them yet (§12) |
-| debug info | dropped | Microware's format differs from DWARF |
-
-Other things to handle:
+| mainline header (type, attributes, edition, stack, entry) | absolute and code symbols `__os9_typelang`, `__os9_attrev`, `__os9_edition`, `__os9_stack`, `__os9_entry`, `__os9_trapent` | |
 
 - **Long calls:** GNU `ld` doesn't build Microware's `_jmptbl` jump table for calls beyond ±32K;
-  `elf2mod` will (see "Large programs").
-- **Linker-defined symbols:** other symbols the Microware libraries expect from their linker
-  must come from the linker script. The first link's undefined-symbol errors will show the list.
-- **Calling convention:** calls between GCC code and converted Microware code
-  need `-mos9call` (§4).
-- **Constructors:** C++ static constructors need their own startup mechanism in the ELF→ROF
-  (`elf2rof`) direction, since `l68` has nothing like `.init_array`. ROF has no weak symbols.
+  `elf2mod` does (see "Large programs").
+- **Linker-defined symbols** that Microware's libraries expect from their linker (`end`, `btext`,
+  …) come from the linker script or from `elf2mod`.
+- **Calling convention:** calls between GCC code and converted Microware code need `-mos9call`
+  (§4).
+- **Constructors:** C++ static constructors would need their own startup mechanism in the
+  ELF→ROF (`elf2rof`) direction, since `l68` has nothing like `.init_array`. ROF has no weak
+  symbols.
 
 ### Prior art: the old binutils ROF backend
 
@@ -907,48 +888,37 @@ Its gaps:
   on modern BFD's generic remapping by size and PC-relative flag, which can't represent negative
   references or the a6 bias.
 
-### Decision: standalone tools
+### Standalone tools
 
-Porting `roff.c` into binutils 2.35 or newer would mean rewriting nearly all of its BFD glue:
-- `DEFUN`/`PROTO` macros
-- `bfd_read` → `bfd_bread`
-- section size fields
-- target jump tables
-- archive interfaces
-- the removed "seclet" linker
+Porting `roff.c` into binutils 2.35 or newer would mean rewriting nearly all of its BFD glue
+(`DEFUN`/`PROTO` macros, `bfd_read` → `bfd_bread`, section size fields, target jump tables,
+archive interfaces, the removed "seclet" linker), and mixed-format ELF links would stay fragile.
+So the conversion is done by standalone tools, specified by the Assembler/Linker manual, with
+`roff.c` for real-world details, in the m68k-os9-tools repository next to `elf2mod`, which builds
+them in the `Dockerfile`'s `elf2mod` step. binutils stays unchanged. A BFD port remains possible
+if `nm`/`objdump` on ROF or direct `ld` input turn out to matter.
 
-Mixed-format ELF links would also stay fragile. Instead:
-
-- **`rof2elf`** (first): parses ROF, splits `.l` files, and writes ELF relocatables through
-  libbfd (like `elf2mod`) or directly, with exactly the relocations we choose. Vendor libraries
-  are converted once into `.a` archives; your own Microware objects through a Makefile rule
-  (`%.o: %.r`). A wrapper or GCC driver spec could hide the step later. Estimated 600–900 lines.
-- **`elf2rof`** (later): reads an ELF `.o` (or a `ld -r` result) and writes ROF for `l68`.
-  Similar size.
-  - **As implemented** (`elf2rof.md` in `cdifan/elf2mod`): reads ELF relocatables and `ar`
-    archives directly (no libbfd, like `rof2elf`) and writes ROF edition 9, one psect per object;
-    an archive becomes a `.l` library. Read-only sections become code, PC-relative references
-    within the code and references to absolute symbols are resolved, PLT relocations are
-    PC-relative, and the `__os9_*` symbols give a mainline's header. Comparing with `l68`
-    showed what the manual doesn't say:
-    - every ROF ends with 16 zero bytes, which `rdump` and `l68` skip; a library without them
-      is misread
-    - `l68` doesn't compute 4-byte relative references; Microware's assemblers write an external
-      reference plus a negated reference to the psect's code instead, and so does `elf2rof`
-    - the assemblers sort definitions and external references by name and write local
-      references in descending order; `l68` pulls library members in the order of the external
-      references and builds the initialized data references in reverse, so `elf2rof` does the
-      same, for identical modules
-    - `l68 -a` redirects far `bsr.w` and `lea`, but not `bra.w`, which GCC uses for tail calls
-      with `-mbsrw`: large programs for `l68` need no `-mbsrw` or `-fno-optimize-sibling-calls`
-    - libgcc's soft-float members used GOT relocations (the `_fpCCR` issue, since fixed, §4);
-      `elf2rof -k` skips archive members it can't convert
-- **Specification:** the Assembler/Linker manual, plus `roff.c` for real-world details.
-- **Location:** both live in a fork of `elf2mod` (`cdifan/elf2mod`), next to `elf2mod` itself. All
-  three tools handle OS-9 module headers, CRCs and ELF via libbfd, so they can share code, and they
-  build in the existing `elf2mod` step of the `Dockerfile`. binutils itself stays unchanged.
-- **A BFD port** remains possible later, if `nm`/`objdump` on ROF or direct `ld` input turn out
-  to matter.
+- **`rof2elf`** (`rof2elf.md`) parses ROF, splits `.l` files, and writes ELF relocatables
+  directly (no libbfd), with exactly the relocations above. The front ends convert Microware's
+  libraries and objects on the fly into a cache (`m68k-os9-xcc.md`, "Converting them"); by hand,
+  vendor libraries are converted once into `.a` archives, one's own objects through a Makefile
+  rule (`%.o: %.r`).
+- **`elf2rof`** (`elf2rof.md`) reads ELF relocatables and `ar` archives directly and writes ROF
+  edition 9, one psect per object; an archive becomes a `.l` library. Read-only sections become
+  code, PC-relative references within the code and references to absolute symbols are resolved,
+  PLT relocations are PC-relative, and the `__os9_*` symbols give a mainline's header. Comparing
+  with `l68` showed what the manual doesn't say:
+  - every ROF ends with 16 zero bytes, which `rdump` and `l68` skip; a library without them is
+    misread
+  - `l68` doesn't compute 4-byte relative references; Microware's assemblers write an external
+    reference plus a negated reference to the psect's code instead, and so does `elf2rof`
+  - the assemblers sort definitions and external references by name and write local references
+    in descending order; `l68` pulls library members in the order of the external references and
+    builds the initialized data references in reverse, so `elf2rof` does the same, for identical
+    modules
+  - `l68 -a` redirects far `bsr.w` and `lea`, but not `bra.w`, which GCC uses for tail calls
+    with `-mbsrw`: large programs for `l68` need no `-mbsrw` or `-fno-optimize-sibling-calls`
+  - `elf2rof -k` skips archive members it can't convert
 
 ### Large programs
 
@@ -958,28 +928,27 @@ displacements: calls and PC-relative references reach ±32 KB, and a6-relative d
 
 #### Code beyond ±32 KB: a jump table, built by `elf2mod`
 
-The Microware linker `l68` solves this with a jump table, `_jmptbl`, in the data area (`l68 -a`,
+Microware's linker `l68` solves this with a jump table, `_jmptbl`, in the data area (`l68 -a`,
 which `cc` uses by default; *OS-9 Assembler/Linker User Manual*, chapter 6 "The Linker" and
 chapter 7 "OS-9 Programming Techniques"). Each entry is a `jmp` to an absolute address (fixed up
 when OS-9 loads the module), and each call that's too far is redirected through an entry, with
 one entry per unreachable destination. `l68` redirects `bsr.w` and PC-relative `lea`/`pea`;
-conditional branches (`Bcc`, `DBcc`) stay limited to ±32K. Our table below adds `bra.w` (tail
-calls). `roff.c` did the same in its GNU
-linker. We do it in `elf2mod`, after linking, which keeps binutils unchanged:
+conditional branches (`Bcc`, `DBcc`) stay limited to ±32K. `roff.c` did the same in its GNU
+linker. Here `elf2mod` does it, after linking, which keeps binutils unchanged, and adds `bra.w`
+(tail calls):
 
 1. Compile as usual. With `-mbsrw`, calls are `bsr.w`; without it, `-mpcrel` calls are
    `lea f(pc),aN` followed by `jsr (aN)`. Both forms are patchable, so `-mbsrw` isn't required.
 2. Link with `-q` (keep relocations, as already required) and `--noinhibit-exec`. ld then still
    reports "relocation truncated to fit" for every call that's too far, but writes the output
-   anyway and keeps the relocations. Verified with the toolchain: without the option no output is
-   written; with it, ld exits with status 0.
+   anyway, exits with status 0, and keeps the relocations.
 3. `elf2mod` finds the overflowed relocations (`R_68K_PLT16` for most `-mbsrw` calls, `R_68K_PC16`
    for calls to `static` functions in other sections and for PC-relative address loads). It
-   identifies each instruction by its opcode word just before the relocation (checked under a mask),
-   not by the relocation type, and refuses anything it doesn't recognise. It gives each far target
-   one table entry (`jmp f`, `$4EF9` plus a 32-bit address, with a load-time relocation like
-   `R_68K_32` in `.data`), and patches the instruction. Each patch keeps the instruction's size, so
-   nothing else moves:
+   identifies each instruction by its opcode word just before the relocation (checked under a
+   mask), not by the relocation type, and refuses anything it doesn't recognise. It gives each far
+   target one table entry (`jmp f`, `$4EF9` plus a 32-bit address, with a load-time relocation
+   like `R_68K_32` in `.data`), and patches the instruction. Each patch keeps the instruction's
+   size, so nothing else moves:
 
 | Instruction | Becomes |
 |---|---|
@@ -991,28 +960,18 @@ linker. We do it in `elf2mod`, after linking, which keeps binutils unchanged:
 - **Space for the table** must already exist inside a6's window, because the data layout is fixed
   after linking. `l68` puts the table at the end of the initialized data, i.e. at the end of the
   64 KB a6 area and before the remote data (the *OS-9 C Language User Manual*, chapter 2, shows
-  this layout for the `remote` storage class). The linker script reserves `_jmptbl` at the end of
-  `.data` too. Since this toolchain puts `.bss` after `.data` (`l68` assigns the uninitialized data
-  first), the table ends up between `.data` and `.bss`, still inside the window. `elf2mod` reports
-  how many entries are needed; a first link (or a generous default) sets the size, and a wrapper
-  or Makefile rule can automate the two passes.
+  this layout for the `remote` storage class). The linker script reserves `_jmptbl` to
+  `_ejmptbl` at the end of `.data` too (`--defsym __jmptbl_size=N`); `elf2mod` reports how many
+  entries are needed, and `m68k-os9-gcc` and `m68k-os9-l68` link a second time with that size.
 - **The table must stay reachable:** `elf2mod` checks that the end of `_jmptbl` is within a6's
   reach (a6 + 0x7FFF); a large `.data` could push it out.
 - **Condition codes:** `pea` doesn't change them, but its replacement `move.l` does. That's
   harmless for GCC's code, but matters for hand-written assembly that relies on them.
 - **Leftover overflows are errors.** Because ld exits with status 0 under `--noinhibit-exec`,
-  `elf2mod` must fail if any overflowed relocation remains that it can't patch, e.g. a
-  PC-relative *read* of a far constant, or a far address load into a data register.
+  `elf2mod` fails if any overflowed relocation remains that it can't patch, e.g. a PC-relative
+  *read* of a far constant, or a far address load into a data register.
 - **Converted Microware objects** call externals with `bsr.w` and rely on this mechanism, so it
   covers them too.
-
-**As implemented** (`cdifan/elf2mod`, `elf2mod.md` there): as above, with the table reserved
-from `_jmptbl` to `_ejmptbl` at the end of `.data` (`--defsym __jmptbl_size=N` in the test
-linker script). Since the data layout now puts `.bss` first (see "Data beyond 64 KB"), the table
-sits at the end of the initialized data, as with `l68`. Tested by running modules: the Level 2
-harness (`abirun -m`) loads an `elf2mod` module as OS-9 does (copying the initialized data and
-relocating its references), and `make check-mod` runs every Level 2 test as a module, plus
-`modtests/far.c`, whose `bsr.w`, `bra.w`, `lea` and `pea` references cross 40 KB of code.
 
 #### Branches within a function
 
@@ -1026,18 +985,18 @@ The jump table only covers calls and address loads. Branches *within* a function
 | `-mcpu=68000`, no `--pcrel` | an inverted short branch plus `jmp` to an absolute address (`R_68K_32` in `.text`) | no: OS-9 code must be position-independent |
 | `-mcpu=68000 --pcrel` (what `gcc -mpcrel` passes) | an error: "value … out of range" | no, but it fails at compile time |
 
-So with this toolchain's flags, a function containing a branch longer than 32 KB fails to compile
-(verified). gas could be taught a position-independent long form, but binutils stays unchanged,
-so this remains a documented limitation; such functions are very rare. The same applies to
+So with this toolchain's flags, a function containing a branch longer than 32 KB fails to
+compile. gas could be taught a position-independent long form, but binutils stays unchanged, so
+this is a documented limitation; such functions are very rare. The same applies to
 `-freorder-blocks-and-partition`, which moves cold code to `.text.unlikely` and reaches it with
 conditional branches: it's disabled by default for this target, and should stay off for large
 programs.
 
 **Pitfall, the assembler's default CPU:** run by hand, `m68k-elfos9-as` defaults to a 68020-class
 CPU, despite the `--with-cpu=68000` passed to the binutils build. It then silently turns far
-relaxable branches into 68020-only `bcc.l` instructions (verified). Through `gcc`, the correct
-options (`-mcpu=68000 --pcrel`) are passed, but hand-written assembly assembled directly, like the
-README's `cstart.s` example, should use `m68k-elfos9-as -m68000 --pcrel`.
+relaxable branches into 68020-only `bcc.l` instructions. Through `gcc`, the correct options
+(`-mcpu=68000 --pcrel`) are passed, but hand-written assembly assembled directly should use
+`m68k-elfos9-as -m68000 --pcrel`.
 
 #### Data beyond 64 KB: remote data
 
@@ -1045,36 +1004,31 @@ Variables that don't fit in the 64 KB a6 window are marked *remote*, like Microw
 storage class (*OS-9 C Language User Manual*, chapter 2; Microware C 3.2 also has `-k0l`, 32-bit
 offsets for all data):
 
-- An attribute (`remote`) places them in `.remote.data` / `.remote.bss` sections, which the linker
+- The `remote` attribute places them in `.remote.data` / `.remote.bss` sections, which the linker
   script puts after the normal data, beyond the window. (Not `.data.remote` / `.bss.remote`:
   linker scripts' `.data.*` and `.bss.*` patterns would capture those.)
 - GCC accesses them with a 32-bit offset in an index register, e.g. `move.l #sym,dN` followed by
   `0(a6,dN.l)`; small data keeps the fast 16-bit form. (The GCC 1.37.1 OS-9 port's `-mremote`
-  did the same.)
-- `elf2mod` accepts these 32-bit references from code to data as link-time constants (a6-relative
-  offsets), not as pointers needing load-time relocation.
-- `rof2elf` maps Microware's remote vsects onto the same sections.
-
-**As implemented.**
-- **GCC:** the attribute marks the symbol (`TARGET_ENCODE_SECTION_INFO`, which also names the
-  section, since GCC puts uninitialized variables in `.bss` without asking
+  did the same.) The attribute marks the symbol (`TARGET_ENCODE_SECTION_INFO`, which also names
+  the section, since GCC puts uninitialized variables in `.bss` without asking
   `TARGET_ASM_SELECT_SECTION`). An address of a remote variable is not a legitimate constant or
   address; the address hooks and the `movsi` expander turn it into a6 plus `move.l #sym`. The
   attribute needs `-ma6rel`, and `TARGET_SECTION_TYPE_FLAGS` makes `.remote.bss` `@nobits`.
+- `elf2mod` accepts these 32-bit references from code to data as link-time constants (a6-relative
+  offsets), not as pointers needing load-time relocation.
+- `rof2elf` maps Microware's remote vsects onto the same sections.
 - **The full 64 KB window:** with data from -0x8000, more than 32 KB of data crosses from
-  0xFFFFFFFF to 0. GNU `ld` only accepts that with `--no-check-sections`; the README's "32K only"
-  comment in `os9.lds` comes from this. With the option, the window holds up to 64 KB, as with
-  Microware C 3.2, and remote data follows directly.
+  0xFFFFFFFF to 0. GNU `ld` only accepts that with `--no-check-sections`. With the option, the
+  window holds up to 64 KB, as with Microware C 3.2, and remote data follows directly.
 - **Layout:** the data area then extends past 0, so `.text` goes above it (e.g. at `0x400000`);
-  `elf2mod` now accepts any `.text` address. The module's initialized data is a single block, so
+  `elf2mod` accepts any `.text` address. The module's initialized data is a single block, so
   `.bss` goes before `.data` (`elf2mod` takes the data area's start from whichever comes first):
-  then `.data` and `.remote.data` are adjacent, and no zeros are stored for `.bss`.
-- **Tests:** Level 1 checks sections and code; Level 2 runs 40 KB of normal data plus a
-  70,000-byte remote array at every optimization level.
+  then `.data` and `.remote.data` are adjacent, no zeros are stored for `.bss`, and the jump table
+  sits at the end of the initialized data, as with `l68`.
 
 ### Debug symbols for Microware's debuggers
 
-Microware's debuggers read two files that the Microware linker writes with `l68 -g` (or `cc -g`).
+Microware's debuggers read two files that Microware's linker writes with `l68 -g` (or `cc -g`).
 They're placed in an `STB` directory next to the program if one exists:
 
 - `<program>.stb`, a **symbol module**: global code and data symbols. Used by the user-state
@@ -1084,7 +1038,7 @@ They're placed in an `STB` directory next to the program if one exists:
 
 SrcDbg can be told to skip either file, so the two can be supported independently.
 
-#### `.stb` symbol module: implemented in `elf2mod`
+#### `.stb` symbol module: `elf2mod -g`
 
 The format is specified in Appendix A of the *OS-9/68000 User-State Debugger* manual, with an
 example dump. It's an ordinary OS-9 data module:
@@ -1098,91 +1052,73 @@ example dump. It's an ordinary OS-9 data module:
 | names | NUL-terminated symbol names |
 | module CRC | as for any OS-9 module |
 
-The program-module CRC lets the debugger check that the symbols match the program. The old
-`roff.c` backend wrote this format too, which fills in some real-world details:
-- data symbol values are a6-relative, including the 0x8000 bias
-- code symbol values are offsets from the start of the module
-- some symbols get an extra type bit (0x2000) beyond the documented low 3 bits
+The program-module CRC lets the debugger check that the symbols match the program. `elf2mod`
+builds the program module and its CRC anyway, so it writes the `.stb` from the linked ELF's symbol
+table (`elf2mod -g`, `elf2mod.md`). What the manual doesn't say, from `roff.c` and from comparisons
+with Ultra C's `l68 -g` and Microware C 3.2's `l68 -g` (`test/l68cmp`), all reproduced:
 
-**Plan:** generate the `.stb` in `elf2mod`, from the linked ELF's symbol table. `elf2mod` builds
-the program module and its CRC anyway. An option would select whether to write it.
-
-**As implemented** (`elf2mod -g`, `elf2mod.md` in `cdifan/elf2mod`): compared with Ultra C's `l68
--g` and Microware C 3.2's `l68 -g` (`test/l68cmp`), more details:
-- the type flag 0x2000 marks the symbols the linker defines: `btext`, `bname`, `etext`
-  (code, 0x2004), `end` and `_jmptbl` (data, 0x2001); `elf2mod` adds them with l68's values
+- the type flag 0x2000 marks the symbols the linker defines: `btext`, `bname`, `etext` (code,
+  0x2004), `end` and `_jmptbl` (data, 0x2001); `elf2mod` adds them with l68's values. `_jmptbl`
+  only in modules that may have a jump table (the program header's layout: programs, trap
+  handlers, `-i` system modules), not in drivers, descriptors or file managers
 - the two linkers differ, so `elf2mod` has two styles: C 3.2's l68 (the default) also flags the
   symbols other psects refer to, and lists equal values in reverse definition order; Ultra C's
   l68 also defines `_btext`, `_bname`, `_etext`, `_bdata`/`bdata` and `_enddata`, lists equal
   values in definition order, and puts the symbol module's header parity at offset 0x28 rather
-  than 0x2E (`--stb=ucc`)
-- the module header's symbol field (offset 0x1C) points to the STB header
-- the module owner comes from the `GRPUSER` environment variable (1.0 if unset), with both
-  linkers; `elf2mod` reads it too, and has `--owner`
+  than 0x2E (`--stb=ucc`); entries with the same value are ordered by object, as each linker
+  defines them
+- the module owner comes from the `GRPUSER` environment variable, with both linkers (1.0 if
+  unset; the native OS-9 `l68` takes the process's owner); `elf2mod` reads it too (0.0 if unset),
+  and has `--owner`
 
-`test/l68cmp/run.sh` links the same ROFs with l68 and with `rof2elf`, GNU ld (in l68's order) and
-`elf2mod`: the symbol modules list the same symbols, and the program modules are identical except
-for the order of the data relocation table, and so the CRCs. Microware's tools are only used
-locally (`MWOS`, `MWLIB`, or `MWBUILT` for a build made under vDos with `vdos.bat`). This also
-found that Ultra C's assembler writes ROF edition 9.1, with 32-bit counts; `rof2elf` reads it now.
+`test/l68cmp/run.sh` links the same ROFs with `l68` and with `rof2elf`, GNU ld (in l68's order)
+and `elf2mod`: the symbol modules list the same symbols, and the program modules are identical
+except for the order of the data relocation table, and so the CRCs. Microware's tools are only
+used locally (`MWOS`, `MWLIB`, or `MWBUILT` for a build made under vDos with `vdos.bat`).
+Ultra C's assembler writes ROF edition 9.1, with 32-bit counts, which `rof2elf` reads.
 
-#### `.dbg` source-level information: undocumented, research item
+#### `.dbg` source-level information
 
-None of the available manuals describe the contents of `.dbg` files:
-- The Assembler/Linker manual only calls the ROF "Debug Information" section variable-length, and
-  says `l68 -g` makes a `.dbg` when the `.r` files contain debug information.
-- `roff.c` writes a `.dbg` with a magic number and the program CRC (at offset 6), followed by
-  the collected debug sections. According to Hunt's announcement, its debug support was taken
-  from Stephan Paschedag's OS-9 port of GCC 2.5.8. So the layout may come from an earlier
-  OS-9-hosted GCC rather than being Hunt's own invention, but whether it matches Microware's
-  `.dbg` format is still to be checked.
+None of the available manuals describe the contents of `.dbg` files. The Assembler/Linker manual
+only calls the ROF "Debug Information" section variable-length, and says `l68 -g` makes a `.dbg`
+when the `.r` files contain debug information. `roff.c` writes a `.dbg` with a magic number and
+the program CRC (at offset 6), followed by the collected debug sections; by Hunt's announcement,
+its debug support was taken from Stephan Paschedag's OS-9 port of GCC 2.5.8.
 
-Supporting SrcDbg would mean reverse-engineering the Microware C 3.2 debug format, and translating
-GCC's DWARF into it. That's feasible with the original compiler and linker, using the DOS-hosted
-cross versions (§7):
-1. compile small sources with `xcc -g -a` and study how the compiler emits debug information in
-   assembly form
-2. compile them to `.r` with `-g` and link with `l68 -g`, then examine the ROF debug sections and
-   the resulting `.dbg`
-3. vary the source systematically (lines, nesting, locals and parameters, register variables,
-   structs, unions, enums, typedefs, arrays, pointers) and compare the outputs
+### Drop-ins for Microware's tools
 
-Mapping DWARF line tables, scopes, variable locations and types onto that format is a substantial
-project, so it's a research item for later, after `rof2elf` and `.stb` support.
+- **`m68k-os9-l68`** and **`m68k-os9-libgen`**, drop-ins for Microware's linker and librarian,
+  linking with GNU ld and `elf2mod`, with Microware's symbol modules, jump tables and library
+  member order.
 
-## 7. Microware tools available for testing
+## 7. Microware tools used for testing
 
 > **Copyright notice.** Microware OS-9 and its development tools are proprietary. Microware LP,
-> which says it owns all OS-9 copyrights and trademarks, enforces this. On 5 August 2026 it filed
-> a [DMCA notice][microware-dmca] that got a public GitHub copy of the OS-9/68K SDK blocked. This
-> project therefore does not link to, copy or redistribute any Microware tools, libraries or
-> headers. The tools below are used only locally, by developers who have them, to observe their
-> behaviour. Everything in this project is built from the public manuals and from that
+> which says it owns all OS-9 copyrights and trademarks, enforces this: in August 2026 a [DMCA
+> notice][microware-dmca] it filed got a public GitHub copy of OS-9 development software blocked.
+> This project therefore does not link to, copy or redistribute any Microware tools, libraries or
+> headers. The only tool outputs committed are the assembler listings in `test/os9c`: what Microware
+> C 3.2 and Ultra C 2.5 make of this project's own probe programs, kept as the evidence for §3 and
+> §4. The tools below are used only locally, by developers who have them, to observe their
+> behaviour. Everything else in this project is built from the public manuals and from that
 > observation.
 
 [microware-dmca]: https://github.com/github/dmca/blob/master/2026/08/2026-08-05-microware.md
 
-- **Microware OS-9/68K 3.2.4 SDK (MWOS tree)**, with Windows-hosted tools in `DOS/BIN`:
-  - compilers and assembly: `xcc` (Microware Ultra C 2.5), `r68`, `l68`, `rdump`, `deasm`
-  - `os9*` disk utilities
-  - documentation in `DOC/PDF`, including the compiler manuals *Using Ultra C/C++*
-    (`ultrac_use.pdf`), the *Ultra C/C++ Processor Guide* (`ultrac_pg.pdf`, with a 68K ABI
-    section on register usage, argument passing and struct return) and the *Ultra C Library
-    Reference* (`ultrac_lib_ref.pdf`), plus `DOS/BIN/compiler.chm`
-  - CD-i variants of the tree also carry the CD-i headers and libraries from Microware C 3.2,
-    the older OS-9 C compiler (`clib.l`, `cdisys.l`, `cstart.r`, `math.l`, …)
-
-  To run Ultra C 2.5's `xcc` from a POSIX-style shell (Git Bash, MSYS2) on Windows:
+- **Microware Ultra C 2.5**, Windows-hosted: `xcc`, `r68`, `l68`, `libgen`, `rdump`, `deasm`, with
+  its manuals *Using Ultra C/C++*, the *Ultra C/C++ Processor Guide* (with a 68K ABI section on
+  register usage, argument passing and struct return) and the *Ultra C Library Reference*. To run
+  its `xcc` from a POSIX-style shell (Git Bash, MSYS2) on Windows:
 
   ```sh
-  export MWOS='<path to the MWOS tree, Windows syntax>'
-  export PATH="<MWOS tree>/DOS/BIN:$PATH"
+  export MWOS='<path to the installation, Windows syntax>'
+  export PATH="<installation>/DOS/BIN:$PATH"
   MSYS2_ARG_CONV_EXCL='*' xcc.exe -mode=compat -to=osk -tp=68k -a -c -s file.c   # → file.a
   ```
 
   Gotchas:
-  - Without `DOS/BIN` on `PATH`, phase launches fail with "argument list length error while
-    forking".
+  - Without its tools' directory on `PATH`, phase launches fail with "argument list length error
+    while forking".
   - `-tp=68000` and `-tp=070` are rejected; use `-tp=68k`.
   - Compat mode uses the old `cc` option set (`-a` for assembly, `-bp` to show phases).
   - Set `MWOS` rather than using `-mw=`.
@@ -1192,11 +1128,15 @@ project, so it's a research item for later, after `rof2elf` and `.stb` support.
     (optimizer), `r68` (assembler) and `l68` (linker); headers and libraries are found through the
     `CDEF`/`CLIB` environment variables. It runs in a DOS emulator such as vDos, DOSBox or MS-DOS
     Player. Same options as native `cc`: `xcc -a -s file.c` → `file.a`.
-  - **Native `cc`** inside CD-i Emulator (§9), from a Microware disk image.
+  - **Native `cc`** inside CD-i Emulator (§9).
 
   Either one confirms the §3 results with the original compiler.
-- **Cross-checking compiled libraries:** disassemble a few functions from the CD-i `clib.l` with
-  `rdump`/`deasm` to confirm the conventions independently.
+
+### Microware's other host tools
+
+| Tool | What it does | Here |
+|---|---|---|
+| `r68` | the assembler | `m68k-os9-r68` |
 
 ## 8. Build and host environments
 
@@ -1204,62 +1144,43 @@ GCC cannot be built with MSVC (Visual Studio). It needs a POSIX shell environmen
 GNU make, sed/awk, m4, flex/bison) and a GCC-compatible host compiler. Git for Windows' Git Bash
 is a cut-down MSYS2 runtime with neither a compiler nor a package manager.
 
-Options:
+Development builds use **WSL2 + Ubuntu**: the same environment as the `Dockerfile`, and the
+fastest builds. Windows tools such as `xcc.exe` can be called from inside WSL for compatibility
+testing. Keep the build directory inside the Linux filesystem (e.g. `~/build`), not under
+`/mnt/c`, which is slow for builds. MSYS2 with mingw-w64 GCC also works (below), roughly 3–5×
+slower; Cygwin is slower still.
 
-1. **WSL2 + Ubuntu (chosen).** Same environment as the `Dockerfile`, and the fastest builds.
-   Windows tools such as `xcc.exe` can be called from inside WSL for compatibility testing. Keep
-   the build directory inside the Linux filesystem (e.g. `~/build`), not under `/mnt/c`, which is
-   slow for builds.
-2. **MSYS2 + mingw-w64 GCC.** Produces native Windows `.exe` tools. Builds are roughly 3–5×
-   slower, with occasional Windows-specific build fixes.
-3. **Cygwin.** Slowest of the three; not recommended.
-
-Estimates on a 4-core machine under WSL2:
-- `cc1` + `libgcc` only: ~10–20 minutes
-- full toolchain: ~30–45 minutes
-- incremental backend rebuilds: a minute or two
-- disk: under ~15 GB including the distribution
-
-Setup plan: install WSL2 with Ubuntu, create a sudo-capable user, install the `apt` dependencies
-listed in the `Dockerfile`, then configure GCC as in the `Dockerfile`
+On a 4-core machine under WSL2: `cc1` + `libgcc` only take ~10–20 minutes, the full toolchain
+~30–45 minutes, incremental backend rebuilds a minute or two; the disk use stays under ~15 GB
+including the distribution. Setup: WSL2 with Ubuntu, the `apt` dependencies listed in the
+`Dockerfile`, then GCC configured as in the `Dockerfile`
 (`--target=m68k-elfos9 --with-cpu=68000 --enable-languages=c …`).
 
-### Windows as a host (goal)
+### Windows as a host
 
-The toolchain is to run natively on Windows too, without WSL or Docker: a Windows user should be
-able to download it and install it. Decided 2026-10-04:
+The toolchain also runs natively on Windows, without WSL or Docker:
 
-- **Built as a Canadian cross** on Linux, in the same Docker image as the Linux toolchain:
-  binutils, GCC and the host tools configured with `--host=x86_64-w64-mingw32` (the
-  distribution's mingw-w64 cross compilers), with the Linux-hosted `m68k-elfos9` compilers built
-  first for the target libraries. The simplest way: one build environment, and faster than
-  building on Windows.
-- **A native MSYS2 build must work too** (MSYS2 with mingw-w64 GCC, option 2 above), so the
-  Windows binaries don't depend on the Linux build alone. Slower, but without cross-specific
-  steps.
+- **Canadian cross** on Linux: binutils, GCC and the host tools configured with
+  `--host=x86_64-w64-mingw32` (or `i686-w64-mingw32`; the distribution's mingw-w64 cross
+  compilers), with the Linux-hosted `m68k-elfos9` compilers built first for the target libraries.
+- **Native MSYS2** (MINGW64 and MINGW32), so the Windows binaries don't depend on the Linux build
+  alone.
 - **The target libraries** (newlib with libgloss's OS-9 runtime and `libos9math`, libgcc, both
   multilibs) are the same files on any host; the Windows packages take them from the Linux build.
 - **Per component:** binutils and GCC build with mingw-w64 as they are. `elf2mod` needs BFD, so
   a mingw-w64 `libbfd` from the same binutils build. `rof2elf` and `elf2rof` are plain C. The
-  front ends (`m68k-os9-xcc`, and `m68k-os9-l68`, `m68k-os9-libgen`, `m68k-os9-ucc` to come) are
-  C on libiberty, which runs programs through `pex_one` as GCC's driver does, with what the hosts
-  do differently in one file (`hostsys.c` in `cdifan/elf2mod`): drive letters, file names
-  regardless of case, replacing a file (`MoveFileEx`), the temporary directory. That is why
-  they're C rather than shell scripts; `m68k-os9-gcc` is still a shell script and is to be
-  rewritten in C on the same code.
-- **The `m68k-os9-` names** are symbolic links on Linux; on Windows they become copies or small
-  launchers.
+  front ends (`m68k-os9-gcc`, `m68k-os9-xcc` and its Ultra C mode `m68k-os9-ucc`,
+  `m68k-os9-l68`, `m68k-os9-libgen`, `m68k-os9-r68`) are C on libiberty, which runs programs
+  through `pex_one` as GCC's driver does, with what the hosts do differently in one file
+  (`hostsys.c`): drive letters, file names regardless of case, replacing a file (`MoveFileEx`),
+  the temporary directory. That is why they're C rather than shell scripts.
 - **The tests stay POSIX** (Makefiles, shell scripts, Musashi, DejaGnu): on Windows they run
-  under WSL or MSYS2, which is fine for development; users don't need them. Testing already
-  crosses over the other way: Windows programs (`cdirun.exe`, Ultra C's `l68.exe`) are called
-  from WSL.
-- **Distribution:** in the end CI builds the Windows binaries as an artifact next to the Linux
-  image, packaged for download and install: a zip at first, perhaps a `.msi` installer later.
+  under WSL or MSYS2. Windows programs (`cdirun.exe`, Ultra C's `l68.exe`) are called from WSL.
 
-## 9. Emulator serial bridge
+## 9. Running tests on OS-9: `cdirun`
 
-Done: **`cdirun`**, a command-line client in the CD-i Emulator version 0.6.x tools, runs
-commands on the OS-9 shell of a CD-i player (over a COM port) or of [CD-i Emulator][cdiemu]
+**`cdirun`**, a command-line client in the CD-i Emulator version 0.6.x tools, runs commands on the
+OS-9 shell of a CD-i player (over a serial port or the network) or of [CD-i Emulator][cdiemu]
 (`cdiemu`) by CD-i Fan, where the shell runs on an emulated serial port, and copies files both
 ways. `cdiemu` emulates CD-i hardware with OS-9 running on it, and runs Microware tools such as
 the native `cc` from a Microware disk image.
@@ -1273,36 +1194,33 @@ afterwards, extensions of the protocol made for `cdirun`.
 
 What the tests use:
 - `cdirun COMMAND...` sends a command line and writes its output until the shell prompts again.
-- `cdirun -dc FILE...` and `-uc FILE...` copy files to and from the current OS-9 directory with
-  the Kermit program on the disk (OS-9 Kermit 1.6), in image mode, or with `-te` as text, with
-  CR line ends on OS-9. This replaces the hex encoding once planned for binaries.
-- `cdirun -st` exits with the OS-9 exit status of the command line and writes it as a last line,
-  `Status GGG:NNN`. The shell reports a status only as `Error #GGG:NNN`, and not 0 or 1 at all;
-  `cdirun` runs the command line through a small helper module of its own (`runst`, built in),
-  which runs the command line and reports every status, which cdirun turns into its `Status`
-  line.
 - On OS-9, programs are run from memory: `attr NAME -e -pe; load -d NAME; NAME` (the shell
   looks for programs only in memory and the execution directory). Microware's `cstart.r` ignores
   what `main` returns, so a test reports through `exit()`.
 
-`make check-os9` and `make check-os9mix` in `test/abi-exec` (§11) run the Level 3 tests this way,
-and `check-os9mix` also compiles the Microware side on OS-9 itself.
+`make check-os9` and the other OS-9 targets in `test/abi-exec` (§11) run the Level 3 tests this
+way, with `CDIRUN=` naming the command, so a wrapper can reach a player by other means.
+`cdiemu` cannot mount a host directory as an OS-9 device, so files travel over the serial line
+(about 300 bytes a second in the emulator).
 
-Still missing: `cdiemu` cannot mount a host directory as an OS-9 device, so files travel over
-the serial line (about 300 bytes a second in the emulator).
+A CD-i player on a network is reached in a similar way: a telnet session to the player, bridged to
+a `cdirun` terminal, takes the place of the serial port, and files travel by ftp from the PC
+instead of Kermit, much faster than the serial line. `test/abi-exec/cdirun-ftp.sh` is a `CDIRUN=`
+wrapper for this.
 
 ## 10. Licensing and upstreaming
 
 ### Fork patches: authorship and license
 
-Murachue's fork commits (2021) are his own, authored and committed by him; this table describes
-them. This work's commits are on the `-compat` branches (see "Branches" below). The upstream
-split points, fetched shallowly and tagged locally in each submodule:
+Murachue's fork commits (2021) are Murachue's own, authored and committed by Murachue; this table
+describes them. This work's commits are on the `-compat` branches (see "Repositories and branches"
+below).
+The upstream split points, fetched shallowly and tagged locally in each submodule:
 
-| Submodule | Upstream split | Fork changes |
+| Submodule | Upstream split | Murachue's changes |
 |---|---|---|
 | gcc | `releases/gcc-11.1.0` = `50bc918` (tag `gcc-11.1.0-base`) | 9 commits, 7 files, +89/−15 |
-| binutils-gdb | the pinned commit `2cb5c79` *is* upstream "2.35 Release" | none |
+| binutils-gdb | the commit `2cb5c79` *is* upstream "2.35 Release" | none |
 | newlib-cygwin | `415fdd4` newlib 4.1.0 (tag `newlib-4.1.0-base`) | 2 commits, `newlib/configure.host`, +5/−1 |
 | psximager | `9c32ba2` of cebix/psximager (tag `cebix-base`) | 2 commits, `src/psxbuild.cpp`, +36/−13 |
 | elf2mod | no upstream (Murachue's own; README says MIT) | — |
@@ -1311,7 +1229,7 @@ There is no explicit license statement or `Signed-off-by:` on the patches. The o
 license in this repo is MIT for the `Dockerfile`, and that header excludes the built image. But
 the GCC patches modify files under GPL version 3 or later, and publishing modified GPL code means
 it is distributed under the GPL. So they are effectively GPLv3+, and newlib's patches fall under
-newlib's licenses.
+newlib's licenses. The same holds for this work's changes to GCC and newlib.
 
 ### GCC's AI policy
 
@@ -1345,9 +1263,10 @@ Murachue's 2021 patches are human-written and unaffected. Upstreaming them would
 
 ### Decision
 
-**The fork's own additions stay fork-only and uncontributable for now.** `-mos9call` and similar
-compiler changes will be written with AI assistance, so they can't go into GCC mainline under
-the current policy. Standalone tools (`rof2elf`, `elf2rof`, …) aren't affected by GCC's policy.
+**This work's compiler changes stay in the fork.** `-mos9call` and the other OS-9 options are
+written with AI assistance, so they can't go into GCC mainline under the current policy. The
+standalone tools (`rof2elf`, `elf2rof`, the drop-ins) aren't affected by GCC's policy. The four gas
+fixes (§2) are meant for upstream binutils.
 
 ### Repositories and branches
 
@@ -1355,31 +1274,23 @@ Development happens in forks under [github.com/cdifan][cdifan]:
 
 [cdifan]: https://github.com/cdifan
 
-- **`cdifan/toolchaincdi`** (forked from `murachue/toolchaincdi`): the superproject. CI publishes
-  `ghcr.io/cdifan/toolchaincdi:latest` on every push to `main`. So `main` only receives states
-  worth publishing, and work in progress goes on a long-lived **`compat-dev`** branch, merged into
-  `main` when ready. Image-neutral changes (docs, CI fixes) may go to `main` directly.
+- **`cdifan/toolchaincdi`** (forked from `murachue/toolchaincdi`): the superproject, branch
+  `main`. CI publishes `ghcr.io/cdifan/toolchaincdi:latest` on every push to `main`.
 - **`cdifan/gcc`** (forked from `gcc-mirror/gcc`, so upstream branches and tags are available):
-  Murachue's **`11.1.0-os9`** branch is kept unchanged as the reference. Our work goes on
-  **`11.1.0-os9-compat`**, branched from it, and `.gitmodules` will point `src/gcc` at that
-  branch once it has commits.
-- **Fixes to Murachue's own code** go on separate branches from `11.1.0-os9`, one commit each,
-  so they can be offered to his fork, and are merged into `11.1.0-os9-compat`:
+  Murachue's **`11.1.0-os9`** branch is kept unchanged as the reference. This work is on
+  **`11.1.0-os9-compat`**, branched from it, which `src/gcc` pins.
+- **Fixes to Murachue's own code** are on separate branches from `11.1.0-os9`, one commit each,
+  so they can be offered to Murachue's fork, and are merged into `11.1.0-os9-compat`:
   `11.1.0-os9-const-pointers` (read-only variables holding addresses are a6-relative data) and
   `11.1.0-os9-lb1sf68-a6rel` (libgcc's soft-float routines reach `_fpCCR` relative to a6, and
   `-ma6rel` defines `__A6REL__`). Both change code built without `-mos9call`, so Level 0 compares
   with Murachue's branch plus these fixes (§11). They're AI-assisted, like the rest of the fork:
-  whether to offer them is Murachue's call, and GCC's policy below concerns the FSF's GCC.
+  whether to take them is Murachue's call.
 - **`cdifan/newlib-cygwin`** (forked from `murachue/newlib-cygwin`): branch
-  `newlib-4.1.0-os9-compat`, with the os9call `setjmp`/`longjmp` (§4 "Libraries").
-- Other submodules (newlib, elf2mod, …) are forked when they need changes, and follow the same
-  pattern: the upstream branch is kept, and the work branch gets a `-compat` suffix.
-- **`cdifan/elf2mod`** (forked from `murachue/elf2mod`, branch `main-compat`) also holds
-  `rof2elf` and `elf2rof` (§6), and the `.stb` generation.
+  `newlib-4.1.0-os9-compat`, with the os9call `setjmp`/`longjmp`, `libos9math` and the OS-9
+  runtime (§4, "Libraries").
 
-Status: all of these exist and are pushed: `cdifan/toolchaincdi` (`main`, `compat-dev`),
-`cdifan/gcc` (`11.1.0-os9`, `11.1.0-os9-compat` and the two fix branches),
-`cdifan/newlib-cygwin` and `cdifan/elf2mod`.
+The upstream branch of each fork is kept as it is; the work branch has a `-compat` suffix.
 
 ### Alternative (not chosen): human-written code with AI guidance
 
@@ -1392,455 +1303,203 @@ stays within what the policy allows. That would mean:
 - writing the test cases, which the policy allows outright
 
 Detailed pseudocode that gets transcribed line by line should be avoided, because the result
-would arguably be "derived from LLM-generated content". When in doubt, ask on the
-gcc mailing list first.
+would arguably be "derived from LLM-generated content". When in doubt, ask on the gcc mailing
+list first. The insertion points are listed in §4 ("Implementation points").
 
-The insertion points and the implementation order are described in §4 ("Implementation points").
+## 11. Tests
 
-## 11. Test plan
-
-The test harness is set up **before** implementation starts, and each implementation phase of
-`-mos9call` (§4, "Implementation points") is gated by the levels below. Test cases may be written
-with AI assistance; GCC's AI policy explicitly allows LLM-generated test cases (§10).
-
-The reference for expected behaviour is the Microware C 3.2 output
+Test cases may be written with AI assistance; GCC's AI policy explicitly allows LLM-generated
+test cases (§10). The reference for expected behaviour is the Microware C 3.2 output
 ([`test/os9c/testos9c-cc32.a`](test/os9c/testos9c-cc32.a)) and the rules derived from it in §3.
 The exception is struct return, which follows Ultra C 2.5
 ([`test/os9c/testos9c-ucc25.a`](test/os9c/testos9c-ucc25.a)), as decided in §4.
 
 ### Level 0: no-regression baseline
 
-Without `-mos9call`, the compiler must behave exactly as before.
+Without the OS-9 options, the compiler behaves exactly as before.
 
-- Before any compiler change, compile a fixed corpus with the unmodified fork and keep the
-  generated assembly as the baseline. The corpus is the probe `test/os9c/testos9c.c` plus
-  realistic code, such as a selection of newlib and libgcc sources. Compile it at `-O0` and `-O2`,
-  with the usual OS-9 flags (`-mpcrel -ma6rel`, with and without `-mbsrw`).
-- After every change, recompile the corpus without `-mos9call` and require
-  **byte-identical** assembly. Deliberate fixes to Murachue's code that change it (§10,
-  "Branches") move the reference: it's then his branch plus those fixes, as built from
-  `11.1.0-os9-const-pointers` (`test/baseline/run.sh` explains; with the unmodified compiler,
-  `strftime` differs).
-- A small script does the compile-and-diff; it runs in the build environment (§8).
+- `test/baseline/run.sh` compiles a fixed set of sources, the probe `test/os9c/testos9c.c` plus
+  realistic code (a selection of newlib and libgcc sources), with the reference compiler and with
+  the changed one, at `-O0` and `-O2`, with the usual OS-9 flags (`-mpcrel -ma6rel`, with and
+  without `-mbsrw`), and requires **byte-identical** assembly. The reference is Murachue's branch
+  plus the fixes that deliberately change it (§10), as built from `11.1.0-os9-const-pointers`
+  (`run.sh` explains; with the unmodified compiler, `strftime` differs).
+- The baselines aren't committed: they would go stale with every compiler build.
 
 ### Level 1: compile-only ABI checks
 
 These verify where values go, by scanning the generated assembly. No m68k hardware or simulator is
 needed.
 
-- **Framework:** GCC's own DejaGnu testsuite, as `gcc/testsuite/gcc.target/m68k/os9call-*.c` with
-  `{ dg-do compile }`, `{ dg-options "-mos9call ..." }` and `{ dg-final { scan-assembler ... } }`.
-  Run with `make check-gcc RUNTESTFLAGS="m68k.exp=os9call*"` (requires `dejagnu`). For a cross
-  compiler this needs a DejaGnu board file describing the target; for compile-only tests a minimal
-  one without a simulator is enough.
+- **Framework:** GCC's own DejaGnu testsuite, as `gcc/testsuite/gcc.target/m68k/os9*.c` (on the
+  `11.1.0-os9-compat` branch of `cdifan/gcc`) with `{ dg-do compile }`,
+  `{ dg-options "-mos9call ..." }` and `{ dg-final { scan-assembler ... } }`. Run with
+  `make check-gcc RUNTESTFLAGS="m68k.exp=os9*"` (requires `dejagnu`), with the compile-only
+  board in `test/dejagnu`.
 - **Marker constants:** call sites pass distinctive values, e.g.
   `f(0x11111111, 0x22222222, 0x33333333)`, so each pattern pins one fact: `#0x11111111` → `%d0`,
   `#0x22222222` → `%d1`, `#0x33333333` pushed. Callees return or store a specific parameter, so
   the pattern shows where the callee reads it from.
-- **Coverage:** one test per rule in §3:
-  - argument positions, including `int, double, int`, `struct, int` and double first
-  - narrow, pointer and float arguments
-  - indirect calls
-  - variadic calls placed like unprototyped calls: `g(int, ...)`, `h(int, int, ...)` and, in C++,
-    `f(...)`, with promotions of unnamed `float`/`char`/`short` arguments
-  - an error when a variadic function is *defined* under `-mos9call` (until the callee side exists)
-  - return values
-  - which registers the prologue saves (d1 unless it's an argument or return register; a0/a1;
-    never d0)
-  - struct return in the a0 convention (buffer address in a0, all aggregates)
-  - no sibling call from os9call functions
-  - the scope rules of §4: member functions (`METHOD_TYPE`) and libcalls unchanged, in C and C++
-  - static member functions and capture-less lambda conversions use the OS-9 convention (C++)
-  - `interrupt_handler` functions excluded; the `stackcall` and `os9call` attributes, including
-    through function pointers and typedefs
-  - `os9call`-attributed declarations (e.g. via `_OS9PROTO`) are called with the OS-9 convention
-    when `-mos9call` is off, and `__OS9CALL__` is defined only with the flag
-  - assigning between function pointers of different effective conventions is diagnosed as
-    incompatible; an unattributed pointer under `-mos9call` and an `os9call` pointer are compatible
-  - `long long` in d0:d1; `long double` and `_Complex` on the stack and returned via a0
-  - small structs and unions with integer modes still passed on the stack
-  - odd-sized structs (1, 2, 3, 5, 6, 7 bytes) in 4-byte-rounded slots, data at the start of the
-    slot
-  - data layout unchanged by `-mos9call` (member offsets, sizes, `enum` size, bitfield order as in
-    probe tests 70–79)
-  - float returned in d0; with `-m68881`, return values still in d0 / d0:d1 and FPU registers saved
-  - the option rules: `-mshort`, `-mrtd`, `-pg`, `-finstrument-functions`, `-fprofile-arcs`,
-    `-fprofile-generate`, `-fuse-cxa-atexit` and (with `-m68020`) `-fstack-limit-symbol` and
-    `-fstack-limit-register=d0`/`d1` rejected; warnings for `-m68881`, missing `-ma6rel`,
-    `-malign-int`, `-fshort-enums` and `-fpack-struct`
-  - functions with frames of 32 KB or more keep a1 intact
-  - C++ mangling: the redundant attribute is dropped, so `U9stackcall` appears only under
-    `-mos9call` and `U7os9call` only without it; unattributed types mangle as with the regular
-    compiler
-  - runtime functions called through built-in declarations use the stack convention under
-    `-mos9call`: the `memcpy` call from a large struct copy; explicit calls to `strlen`, `malloc`
-    and `free`; `_Unwind_Resume`, in C with `-fexceptions` and a `cleanup` variable (and in C++
-    once enabled)
-  - user redeclarations without a convention attribute (K&R `char *malloc();`, a private
-    `memcpy` prototype) still call with the stack convention
-  - nested functions: direct calls accepted, an error when a trampoline would be needed
-  - `__builtin_apply` and friends rejected
-  - `main`, `qsort` comparators and signal handlers compiled with the OS-9 convention
 
 ### Level 2: execution-level ABI checks
 
 Level 1 can't prove that registers actually survive a call, or that values arrive intact. Level 2
-runs code.
+runs code (`test/abi-exec`).
 
 - **Harness:** a small host program built around the Musashi 68000 CPU emulator library
   (permissively licensed, included as a submodule). It loads a linked test image (ELF, no OS), sets
   up a stack and a6 (for `-ma6rel` code), runs it from its entry point, and reports the exit
-  status. It emulates the few OS-9 system calls the tests make (`trap #0`): `F$Exit`, with
-  which the startup (`crt0`) exits with `main`'s result, and `I$Write`/`I$WritLn` on the
-  standard paths, so the same images also run on OS-9 itself (below). With `-m` it loads an
-  OS-9 module as OS-9 does (header parity and CRC checked). The assembly stubs below fill
-  registers with marker values and check them around calls.
+  status. It emulates the few OS-9 system calls the tests make (`trap #0`): `F$Exit`, with which
+  the startup (`crt0`) exits with `main`'s result, and `I$Write`/`I$WritLn` on the standard
+  paths, so the same images also run on OS-9 itself (below). With `-m` it loads an OS-9 module as
+  OS-9 does (copying the initialized data and relocating its references; header parity and CRC
+  checked), and with `-v` checks a `.stb`. The assembly stubs below fill registers with marker
+  values and check them around calls.
 - **Microware side:** short hand-written GNU-syntax assembly stubs reproduce the exact call and
   return sequences of Microware C 3.2 (taken from `testos9c-cc32.a`), and for struct return those
-  of Ultra C 2.5 (from `testos9c-ucc25.a`). They let the harness check:
+  of Ultra C 2.5 (from `testos9c-ucc25.a`). They check:
   - a Microware C 3.2-style caller calling a GCC `-mos9call` function: arguments received correctly,
     and d1 (when not an argument/return register), a0/a1 and d2–d7 preserved
   - a GCC `-mos9call` caller calling a Microware C 3.2-style callee: arguments placed correctly, and
-    no reliance on d0 surviving
+    no reliance on d0 surviving; a0/a1 kept across calls (`tests/keep.c`, with a stack convention
+    stub that clobbers a0/a1)
   - doubles in d0:d1, the stack layout, and caller cleanup
   - struct return in the a0 convention
-  - once the callee side of variadic functions exists: a GCC variadic function called
-    Microware C 3.2-style (first arguments in d0/d1), reading every argument correctly with `va_arg`
+  - GCC variadic functions called Microware C 3.2-style (first arguments in d0/d1), reading every
+    argument correctly with `va_arg`, at every optimization level and with `-m68881`
 - **GCC↔GCC:** `-mos9call` code calling itself, including through function pointers, mixed with
   non-os9call code (libcalls, member functions).
-- **On OS-9 itself:** `make check-os9mod CDIRUN=…` in `test/abi-exec` runs the `check-mod`
-  modules (`tests/` and `modtests/` at `-O2 -mpcrel -ma6rel -mos9call`) on an emulated CD-i 605
-  through `cdirun`, like `check-os9` (Level 3); all pass (2026-10-04). It needs none of
-  Microware's files. One thing learnt: `saves`' 40 KB frame ran off the data area into a bus
-  error (`000:102`) with `elf2mod`'s default 3 KB stack, which the harness never noticed, so
-  `crt0` asks for 48 KB.
-- This level gates implementation phases 3 (callee register saves) and 4 (return values).
+- **Modules:** `make check-mod` runs every Level 2 test as a module built by `elf2mod`, plus
+  `modtests/far.c`, whose `bsr.w`, `bra.w`, `lea` and `pea` references cross 40 KB of code
+  through the jump table, and checks every module's header parity and CRC, and its `.stb`, as OS-9
+  does. Remote data: 40 KB of normal data plus a 70,000-byte remote array, at every optimization
+  level.
+- **newlib:** `make check-newlib` runs `nltests/` in both multilibs: `sprintf`, `sscanf`,
+  `strtol`, `qsort` calling back, a `va_list` passed to `vsnprintf`, `setjmp`/`longjmp` and
+  `malloc`, as OS-9 modules, since newlib's stdio makes programs larger than 32 KB.
+- **On OS-9 itself:** `make check-os9mod CDIRUN=…` runs the `check-mod` modules (`tests/` and
+  `modtests/` at `-O2 -mpcrel -ma6rel -mos9call`) on a CD-i 605 through `cdirun`, like
+  `check-os9` (Level 3). It needs none of Microware's files. `crt0` asks for 48 KB of stack: a 40
+  KB frame runs off the data area with `elf2mod`'s default 3 KB.
 
 ### Level 3: real interoperability
 
-The final proof uses real Microware objects. It depends on `rof2elf` (§6), and on the serial
-bridge (§9, `cdirun`) for running on OS-9 itself.
+Real Microware objects and libraries, converted by `rof2elf` (§6), and OS-9 itself, through
+`cdirun` (§9), on CD-i Emulator's CD-i 605 and on a real CD-i 605 player. Microware's files are
+the user's own (`MWLIB=…`).
 
-- Compile test modules with Microware C 3.2 (and Ultra C 2.5) to `.r`, convert them with `rof2elf`,
-  link them with GCC `-mos9call` objects, convert with `elf2mod`, and run the result in CD-i
-  Emulator (§9). Calls go both ways.
-- Also link against the CD-i libraries (`clib.l`, `cdisys.l`) and call real library functions.
-- **Done so far, without OS-9:** `make check-mw MWLIB=…` in `test/abi-exec` converts the local
-  `cstart.r`, `clib.l` and `sys.l` with `rof2elf` and runs `mwtests/` in the Level 2 emulator. The
-  test calls `strlen`, `atoi`, `strcmp`, `strcpy`, `strcat`, `sprintf`, `sscanf`, `toupper`,
-  `index` and `atol`; Microware's `qsort` calls back a GCC comparator; and GCC's own `memcpy`
-  for a struct copy goes to `clib`'s (with `-mbuiltin=os9call`). Functions that make system calls
-  (memory, I/O, floating point through the math trap) need the real OS-9 in CD-i Emulator.
-- **On OS-9 itself:** built with `-DREAL_OS9`, `mwtests/clib.c` also checks `malloc`/`free`, a
-  file written with `fprintf` and read back with `fgets` (an OS-9 line, ending in `'\r'`), and
-  `atof` returning a double in d0:d1, printed with `%f` through the math trap; `stkchk.c` checks
-  the stack against the process's own. Linked with the original `cstart.r` startup (GNU ld with
-  `test/l68cmp/mod.lds`, then `elf2mod`), copied to an emulated CD-i 605 and run there, both
-  exit with status 0 (2026-10-04). The failure mask is the exit status, so it fits in 16 bits.
-  `make check-os9 MWLIB=… CDIRUN=…` in `test/abi-exec` does it all: it builds the modules, and
-  `cdirun` (CD-i Emulator's command runner) copies them with Kermit, loads and runs them, and
-  reads the exit status. Two things learnt on the way: Microware's `cstart.r` ignores what
-  `main` returns (a program's status comes from `exit()`; the Level 2 harness now has the
-  `F$Exit` system call that `exit()` makes), and the OS-9 shell doesn't report an exit status
-  of 1 (error `000:001`, "Process has aborted"), so the masks start at bit 1.
-- **Mixed, on OS-9 itself:** `test/abi-exec/mixtests/mwside.c` (K&R) is compiled by Microware
-  C 3.2 on the CD-i 605 (`cc -r`), `gccside.c` by GCC `-mos9call`, and the two are linked by
-  Microware's `cc`/`l68` on OS-9 (the GCC object through `elf2rof`) and by GNU ld on the PC
-  (`mwside.r` copied up and through `rof2elf`, with `math.l` for C 3.2's `_T$DCmp`), then run
-  there. GCC calls 21 Microware functions (int, double, pointer, char/short/unsigned,
-  float-as-double, struct arguments in every position; char, short, unsigned char, pointer,
-  float, double and long returns), which check what arrived; Microware code calls GCC
-  functions back, directly, through a pointer and a variadic one (positional `va_arg`), and
-  passes float variables, which C 3.2 widens to double (`_T$FtoD`), to GCC functions declared
-  with `double` ("Widened prototypes", §4), first in d0:d1 and after an int on the stack. Both
-  links pass. A build declaring one function's float argument unwidened must fail exactly
-  that check, and does. `make check-os9mix MWLIB=… CDIRUN=… OS9_CCFLAGS=-t=/r512`; GCC's
-  side needs no libgcc, so `l68` links it alone. Struct returns are left out (C 3.2's static
-  buffer and `-mos9call`'s a0 don't mix, §4).
-- **The `-mos9stkchk` overflow path, on OS-9 itself:** `mwtests/stkover.c` recurses until
-  `cstart.r`'s `_stkcheck` stops it with "**** Stack Overflow ****"; `check-os9` expects its
-  exit status from `mwtests/stkover.status`. That status is 2 (`000:002`), not the 0x101
-  `_stkcheck` pushes: Microware's `_exit` takes its argument in d0, which still holds the path
-  number of the message's `I$WritLn`. A Microware quirk, which the test records.
-- **newlib, on OS-9 itself:** `make check-os9newlib` builds `nltests/` with `-DREAL_OS9` and
-  newlib's OS-9 runtime (`-specs=os9.specs`, §12 item 5) in both multilibs and runs it there:
-  besides the Level 2 checks (stdio formatting, `qsort` callbacks, `va_list`, `malloc`,
-  `setjmp`/`longjmp`, and d2-d7/a2-a5 after `longjmp`), output, a file written and read back,
-  and the time. All pass (2026-10-04).
-- **`-mos9math`, on OS-9 itself:** `make check-os9math` runs `os9tests/fpmath.c` (exact results
-  bit for bit, comparisons, conversions, NaNs) and `os9tests/fnmath.c` (`sin` ... `pow`, within
-  1E-13) with libgcc and libm, and with `-mos9math` in both multilibs. All pass (2026-10-04).
-  With `-mos9math`, GCC defines `__OS9MATH__` and newlib's `math.h` includes
-  `<machine/os9math.h>`, whose `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `log`, `log10`,
-  `sqrt`, `exp` and `pow` are inline traps (`gnu_inline`, so libm's stay for their addresses),
-  with the precision 1E-14 in d2:d3 (`pow`: d4:d5), as C 3.2's own `clib.l` passes it (OS-9
-  Technical Manual, chapter 6); `fnmath` shrinks from 60 KB to 38 KB. On the CD-i 605 `tan`,
-  `acos` and `T$DAdd` change d2/d3, which the manual neither promises nor forbids (it promises
-  unchanged registers only for `T$DCmp`, d0-d3, and `T$FCmp`, d0/d1). The ROM's `math` module
-  (edition 13, CRC `46c5dc`, the same in all 59 player ROMs listed, byte-identical in the 23
-  extracted), read in a disassembly (2026-10-04): `T$DAdd` and `T$DSub` compute in d2:d3 and
-  save nothing (`T$DSub` first flips d2's sign); `Tan` returns with cos(x) in d2:d3, `Acs` with
-  π/2; `T$DMul` and `T$DDiv` save d2-d7; the compares write no register; the float operations
-  share a wrapper that saves and restores d2-d4 (d1 changes); the conversions save d2 (and d3
-  where they use it); `Sin`, `Cos` and `Atn` save d2-a3. Microware C 3.2 assumes none of it:
-  with `-x`, before and after `o68`, it reloads d2:d3 before every double operation and keeps
-  register variables in d4-d7 only. GCC's inline traps likewise count d2:d3 as destroyed by
-  every double operation and conversion, which the manual allows (the conservative choice, kept
-  on purpose), and `math.h`'s inline functions declare the precision registers read-write. As in
-  Microware C, errors (division by zero, overflow, 0/0, out-of-range conversions, domain
-  errors) raise TRAPV and end the program (`000:107`): the manual says the math module returns
-  ±infinity or 0 before trapping, so an `F$STrap` TRAPV handler resuming after the `trapv`
-  could give IEEE-like results, which is left for later. `pow(0, -1)` returns 0.
-- **A CD-i Emulator difference found on the way:** `move.l %sp,-(%sp)` pushes the decremented
-  stack pointer on CD-i Emulator's 68070, the original one on the 68000 (and in the Level 2
-  harness). Whether a real 68070 does the same is open; the tests avoid the instruction (GCC
-  doesn't emit it).
+- **Without OS-9:** `make check-mw MWLIB=…` converts the local `cstart.r`, `clib.l` and `sys.l`
+  with `rof2elf` and runs `mwtests/` in the Level 2 emulator. The test calls `strlen`, `atoi`,
+  `strcmp`, `strcpy`, `strcat`, `sprintf`, `sscanf`, `toupper`, `index` and `atol`; Microware's
+  `qsort` calls back a GCC comparator; and GCC's own `memcpy` for a struct copy goes to `clib`'s
+  (with `-mbuiltin=os9call`).
+- **On OS-9 itself:** `make check-os9 MWLIB=… CDIRUN=…` builds `mwtests/` with `-DREAL_OS9`,
+  which also checks `malloc`/`free`, a file written with `fprintf` and read back with `fgets` (an OS-9
+  line, ending in `'\r'`), and `atof` returning a double in d0:d1, printed with `%f` through the
+  math trap; `stkchk.c` checks the stack against the process's own and watches `_stbot` go down as
+  the stack grows; `newline.c` checks the bytes Microware's `sprintf` writes for a GCC format with
+  `\n` and `\l`, and writes two lines with `\n` that Microware's `fgets` reads back as two lines
+  (built without `-mos9newline` it fails). The modules are linked with the original `cstart.r`
+  startup (GNU ld with `test/l68cmp/mod.lds`, then `elf2mod`), and `cdirun` copies them, loads
+  and runs them, and reads the exit status, the failure mask. The OS-9 shell doesn't report an
+  exit status of 1 (error `000:001`, "Process has aborted"), so the masks start at bit 1.
+- **Mixed, on OS-9 itself:** `make check-os9mix MWLIB=… CDIRUN=… OS9_CCFLAGS=-t=/r512`.
+  `mixtests/mwside.c` (K&R) is compiled by Microware C 3.2 on the CD-i 605 (`cc -r`),
+  `gccside.c` by GCC `-mos9call`, and the two are linked by Microware's `cc`/`l68` on OS-9 (the
+  GCC object through `elf2rof`) and by GNU ld on the PC (`mwside.r` copied up and through
+  `rof2elf`, with `math.l` for C 3.2's `_T$DCmp`), then run there. GCC calls 21 Microware
+  functions (int, double, pointer, char/short/unsigned, float-as-double, struct arguments in every
+  position; char, short, unsigned char, pointer, float, double and long returns), which check what
+  arrived; Microware code calls GCC functions back, directly, through a pointer and a variadic one
+  (positional `va_arg`), and passes float variables, which C 3.2 widens to double (`_T$FtoD`), to
+  GCC functions declared with `double` ("Widened prototypes", §4), first in d0:d1 and after an
+  int on the stack. A build declaring one function's float argument unwidened fails exactly that
+  check. GCC's side needs no libgcc, so `l68` links it alone. Struct returns are left out (C 3.2's
+  static buffer and `-mos9call`'s a0 don't mix, §4).
+- **The `-mos9stkchk` overflow path:** `mwtests/stkover.c` recurses until `cstart.r`'s
+  `_stkcheck` stops it with "**** Stack Overflow ****"; `check-os9` expects its exit status from
+  `mwtests/stkover.status`. That status is 2 (`000:002`), not the 0x101 `_stkcheck` pushes:
+  Microware's `_exit` takes its argument in d0, which still holds the path number of the
+  message's `I$WritLn`. A Microware quirk, which the test records.
+- **newlib on OS-9:** `make check-os9newlib` builds `nltests/` with `-DREAL_OS9` and newlib's OS-9
+  runtime (`-specs=os9.specs`) in both multilibs and runs it there: besides the Level 2 checks
+  (and d2–d7/a2–a5 after `longjmp`), output, a file written and read back, and the time (the
+  player's clock must be set).
+- **`-mos9math`:** `make check-os9math` runs `os9tests/fpmath.c` (exact results bit for bit,
+  comparisons, conversions, NaNs) and `os9tests/fnmath.c` (`sin` … `pow`, within 1E-13) with
+  libgcc and libm, and with `-mos9math` in both multilibs.
+- **A CD-i Emulator difference:** `move.l %sp,-(%sp)` pushes the original stack pointer on the
+  68000 and on a real 68070, but the decremented one on CD-i Emulator's 68070. The tests avoid the
+  instruction (GCC doesn't emit it).
 - **Linking compared with `l68`:** `test/l68cmp/run.sh` links a test program with Microware's
   linker (Ultra C's `l68`, or Microware C 3.2's under vDos via `vdos.bat`) and the same ROFs
   with `rof2elf`, GNU ld and `elf2mod`, and compares the program and `.stb` symbol modules (§6).
-  `make check-mod` also checks every module's header parity and CRC, and its `.stb`, as OS-9
-  does (`abirun -m`, `abirun -v`).
 - **`rof2elf`/`elf2rof` round trips:** `test/l68cmp/run.sh` converts `cstart.r`, `clib.l` and a
   test program ROF → ELF → ROF; Ultra C's `l68` and Microware C 3.2's under vDos link the same
   module from them as from the originals, byte for byte.
-- **GCC code linked by `l68`:** `make check-l68 L68=…` in `test/abi-exec` converts the Level 2
-  tests and libgcc with `elf2rof`, links them with `l68` (with `-a` for the far-call test) and runs
-  them as modules. With `MWLIB=…`, the Level 3 tests too, linked with Microware's original
-  `clib.l`; `cstart.r` goes through `rof2elf` and back without its `__os9_*` symbols, so it
-  isn't a second root psect (the harness's `crt0` is the entry, as with `check-mw`).
-
-### Mapping to implementation phases
-
-| `-mos9call` phase (§4) | Gated by |
-|---|---|
-| 1. option, attributes, state, init | Levels 0 and 1 (byte-identical without the flag; attribute, compatibility and option tests) |
-| 2. argument placement | Levels 0 and 1 |
-| 3. callee register saves | Levels 0, 1 and 2 |
-| 4. return values | Levels 0, 1 and 2 |
-| 5. no tail calls | Levels 0 and 1 |
-| later: real use with Microware libraries | Level 3 |
+- **GCC code linked by `l68`:** `make check-l68 L68=…` converts the Level 2 tests and libgcc with
+  `elf2rof`, links them with `l68` (with `-a` for the far-call test) and runs them as modules.
+  With `MWLIB=…`, the Level 3 tests too, linked with Microware's original `clib.l`; `cstart.r`
+  goes through `rof2elf` and back without its `__os9_*` symbols, so it isn't a second root psect
+  (the harness's `crt0` is the entry, as with `check-mw`).
 
 ### Where tests live
 
 Tests live under `test/` in this repository, outside `src/`: the `Dockerfile` copies `src/` into
 the build, and tests don't belong in the image.
 
-```
-test/
-├── os9c/          the Microware C probe and its Microware C 3.2 / Ultra C 2.5 outputs
-├── baseline/      Level 0: the corpus list and the compile-and-diff script
-├── dejagnu/       Level 1: the compile-only DejaGnu board (the tests are in the GCC tree)
-├── l68cmp/        Level 3: elf2mod, rof2elf and elf2rof compared with Microware's linker
-└── abi-exec/      Level 2: emulator harness, assembly stubs and tests
-    ├── tests/     Level 2 tests, each with its assembly stubs
-    ├── modtests/  far calls through elf2mod's jump table (and l68's)
-    ├── nltests/   newlib, in both multilibs
-    ├── mwtests/   Level 3 (partial): tests linked with Microware's converted C library
-    └── musashi/   68000 emulator library (submodule)
-```
+## 12. Open questions
 
-- DejaGnu tests (Level 1): in the GCC tree, on the `11.1.0-os9-compat` branch of `cdifan/gcc`,
-  where GCC's test framework expects them.
-- Level 0 baselines aren't committed: the script compiles the corpus with the unmodified and
-  the changed compiler, and diffs the two. Committed baselines would go stale with every
-  compiler build.
-- Microware tools and libraries are used only locally and are never committed (§7).
+- **GCC 17:** porting the fork to current mainline (§2).
+- **C++:** enabling it in the toolchain build (`--enable-languages=c,c++`), where the C++ parts of
+  §4 (mangling, member functions) and their Level 1 tests apply, and building libstdc++ with
+  `-mos9call`, with `stackcall` on the unwinder interfaces.
+- **A pragma for Microware declarations:** `#pragma os9call push` / `#pragma os9call pop`, giving
+  every function declared in between the `os9call` attribute (through `m68k_insert_attributes`,
+  as rs6000 does with `#pragma longcall`), for prototyped headers only GCC reads, which could then
+  be wrapped whole around an `#include`. It wouldn't replace `_OS9PROTO` in headers shared with
+  Microware C 3.2.
+- **All-long offsets** (C 3.2's `-k=…l`, Ultra C's `-tp=…ld`/`…lc`): a6-relative data and code
+  references as 32-bit offsets for a whole program. Long data could reuse the `remote` machinery
+  (an option making all of a file's data remote); long code could use `bsr.l` on the 68020 and a
+  32-bit PC-relative sequence on the 68000 (`move.l #target-*,dN` + `jsr (pc,dN.l)`, as
+  `cstart.r` does), which would also lift the ±32 KB limit on branches within a function (§6).
+  How Ultra C and C 3.2's `c68` handle long code offsets is to be checked first.
+- **The math module's errors:** the *OS-9 Technical Manual* says the math module returns
+  ±infinity or 0 before trapping, so an `F$STrap` TRAPV handler resuming after the `trapv` could
+  give IEEE-like results instead of ending the program.
+- **No FPU multilib:** a 68020/68881 multilib would follow `t-mlibs`' CPU multilibs, which
+  `t-elfos9` replaces.
+- **Windows packaging:** the Canadian cross in the Docker build, the zip with its short-names batch
+  file (§8), then a CI artifact next to the Linux image (perhaps a `.msi` installer later).
+- **Features without a run-time test:** FPU register saves under `-m68881`; `os9call` and
+  `_OS9PROTO` declarations used without `-mos9call`; odd-sized structs of 2, 5, 6 and 7 bytes (1
+  and 3 are tested); `long double` and `_Complex` on the stack and returned via a0; struct return
+  through a function pointer; the exclusion of interrupt handlers; the 68881 `setjmp`/`longjmp`
+  variants; a double as the second argument of a variadic call to a Microware library function
+  (on the stack, not in d1). CI runs no tests.
+- **An upstream latent bug:** an `interrupt_handler` function with an FPU and a frame of 32 KB or
+  more restores its FPU registers through a1 after restoring a1. OS-9 convention functions avoid
+  it (FPU registers first, a1 last); interrupt handlers are left unchanged to keep code built
+  without the flag identical.
+- **Not supported:** C 3.2's adhesive object modules (`-bg`) and `-to=os9k` (OS-9000).
 
-## 12. Open questions and next steps
+### Known minor faults
 
-1. **Build environment:** done: WSL2 + Ubuntu (§8), with the unmodified fork as the Level 0
-   reference compiler (§11).
-2. **Test harness:** done: Level 0 (`test/baseline`), Level 1 (DejaGnu tests in the GCC tree,
-   board in `test/dejagnu`), Level 2 (`test/abi-exec`) and a partial Level 3 (§11).
-3. **`-mos9call`:** done on GCC 11.1, phase by phase (branch `11.1.0-os9-compat` of
-   `cdifan/gcc`), plus the fixes from an implementation review and `-mbuiltin=stackcall|os9call`
-   (§4). Still possible: a cross-check against a disassembly of `clib.l`.
-4. **`rof2elf`:** done, in `cdifan/elf2mod` (`rof2elf.md` there). It converts the CD-i libraries
-   and `cstart.r`; 4-byte references to data and equates are link-time constants, which `elf2mod`
-   now accepts in code; the mainline header becomes `__os9_*` symbols; the linker script must
-   define `end`. `elf2mod` handles remote data and takes the module header from the `__os9_*`
-   symbols. Level 3 runs partly (§11); Microware C 3.2's variadic functions were confirmed by
-   running them (§4).
-5. **`elf2rof`:** done, in `cdifan/elf2mod` (`elf2rof.md` there); tested by round trips and by
-   running GCC code linked with `l68` (§11). The deferred items:
-   - **usability: building a module in one step:** done (2026-10-04), apart from the last point:
-     - **newlib's OS-9 runtime,** in `libgloss/m68k` of `cdifan/newlib-cygwin`, built for
-       `m68k-elfos9` in both multilibs: `os9-crt0.o` (argc/argv from the parameter string, with
-       the module's name as `argv[0]`; constructors; `exit(main(...))`), `libos9.a` (newlib's
-       system calls through OS-9's: `I$Read`/`I$ReadLn`, `I$Write`/`I$WritLn`,
-       `I$Open`/`I$Create`, `I$Close`, `I$Seek`, `I$GetStt`/`I$SetStt`, `I$Delete`, `F$Exit`,
-       `F$ID`, `F$Send`, `F$Time`), `os9.ld`, and `os9.specs`, which adds `-mpcrel -ma6rel`, the
-       startup, `-q --no-check-sections -Tos9.ld` and `-los9`. Opt-in (`-specs=os9.specs`) rather
-       than driver defaults, so code built without it stays as before (Level 0). On terminals (SCF
-       paths) a line feed is written as a carriage return, with `I$WritLn`, and read back as a
-       line feed; files are unchanged. The heap lies between the data and the stack: newlib's
-       `malloc` needs it contiguous and growing upwards, and `F$SRqMem` hands out blocks from the
-       top of memory down. The module reserves `__os9_heap` bytes (16 KB) and the shell's `#size`
-       modifier adds more (`prog #64k`). The module header comes from `__os9_*` symbols that
-       `os9.ld` provides with defaults (8 KB of stack, edition 1), which a program or `--defsym`
-       overrides; `--defsym __jmptbl_size=N` reserves `elf2mod`'s jump table.
-     - **`m68k-os9-gcc`,** in `cdifan/elf2mod` (with `m68k-os9-` links to the binutils):
-       compiles and links with `-specs=os9.specs`, then runs `elf2mod`; a program too large for
-       16-bit calls is linked again with the jump table size `elf2mod` asks for; `-Wm,` passes
-       options to `elf2mod`. GCC's driver can't run a tool after linking, hence the wrapper.
-     - tested on an emulated CD-i 605 in both multilibs (`make check-os9newlib`, §11)
-     - still wanted: a recipe or script for converting one's own copy of Microware's libraries
-       (`rof2elf`, `ranlib`), which can't be shipped
-   - **a pragma for Microware declarations** (queued, 2026-10-04): `#pragma os9call push` /
-     `#pragma os9call pop`, giving every function declared in between the `os9call` attribute
-     (through `m68k_insert_attributes`, as rs6000 does with `#pragma longcall`). Backend only, for
-     C and C++ alike. It doesn't replace `_OS9PROTO` in headers shared with Microware C 3.2, which
-     needs the macro to hide the prototypes anyway; it's for prototyped headers only GCC reads
-     (Ultra C's ANSI headers, one's own), which can then be wrapped whole, around an `#include`,
-     without editing each declaration
-   - **sanitized header files** (queued, 2026-10-04): our own headers declaring the Microware
-     library functions (OS-9 system call bindings such as `create` and `_errmsg`, CD-i's
-     libraries), written from the documentation rather than copied from Microware's `DEFS`, so
-     they can ship with the toolchain. They use `_OS9PROTO` ("Headers for Microware libraries",
-     §4), so the same file serves GCC (with the `os9call` attribute, with or without `-mos9call`)
-     and Microware C 3.2 (K&R declarations); widened parameter types only; no clashes with
-     newlib's own declarations. Tested by compiling them with both compilers, and by the run-time
-     test for `_OS9PROTO` declarations used without `-mos9call` listed below
-     - **what they must provide:** more than structure layouts (module headers, process and path
-       descriptors, path options; for CD-i the DCP, FCT, CDFM and UCM structures). Also the
-       constants and macros, probably the bulk (error codes, `I$GetStt`/`I$SetStt` codes, signal
-       codes, module types and attributes, access and permission bits, CD-i drawmap and display
-       control codes), the typedefs those use, and the declarations of functions that don't
-       return `int` (in K&R code an undeclared function returns `int`; under `os9call` a
-       declaration also carries the attribute)
-     - **a compatibility check against Microware's headers,** copying nothing: a generator lists
-       every macro, structure member and declaration in our headers; a test program compares, for
-       each name, our value, size or offset with what Microware's header gives, compiled by
-       Microware C 3.2 itself (under vDos or on OS-9, so layouts are exactly `c68`'s) and by GCC
-       (`-std=gnu89`). It reports mismatches, and names Microware's headers have and ours lack, by
-       name only. A test target like `check-mw`, with `MWDEFS=` pointing to the user's own copy,
-       skipped without one
-     - **what the documentation doesn't cover** (likely plenty): for each name the check finds
-       only in Microware's headers, either (1) leave it out, and whoever needs it includes
-       Microware's header through the pragma wrapper; (2) establish it ourselves first, by
-       disassembly or by running code, write it into our own documentation, and derive the header
-       from that; or (3) mark it as found by the check only and hold it back from the shipped
-       headers until there is a source of our own. Names, values and layouts needed for
-       interoperability are generally treated as facts rather than expression, but Microware
-       enforces its rights (§7), so the check only reports, and our own documents are the source
-     - **two layers:** the pragma wrapper (above) for users who have Microware's headers, around
-       an `#include` of their own copy; it copies nothing and covers the undocumented parts, but
-       gives K&R declarations without argument checking, and Microware's `stdio.h` and friends
-       clash with newlib's, so only OS-9- and CD-i-specific headers can be wrapped. The sanitized
-       headers for users who don't have them. `m68k-os9-xcc` needs neither: it uses the user's
-       `CDEF` headers, as Microware's `xcc` does
-     - **open, not decided yet:** (a) the scope: the OS-9 system interface first (system calls,
-       error codes, module and descriptor structures, from the Technical Manual), then CD-i, or
-       CD-i from the start; (b) which documentation counts as a source: the Microware manuals
-       (local copies with the ICDIA material), and for CD-i the Green Book and the CD-RTOS
-       manuals, and whether anything else is included or excluded; (c) the policy for undocumented
-       items, for instance (2) for what CD-i programs use and (1) for the rest
-   - porting the fork to GCC 17 (§2)
-   - **native Windows binaries** (§8, "Windows as a host"): the Canadian cross in the Docker
-     build, a working MSYS2 build, a mingw-w64 `libbfd` for `elf2mod`, `m68k-os9-gcc` in C,
-     launchers for the `m68k-os9-` names, then a CI artifact (a zip, perhaps a `.msi` later)
-   - enabling C++ in the toolchain build (`--enable-languages=c,c++`); the C++ parts of
-     implementation phase 1 (mangling) and the C++ Level 1 tests apply once it's enabled
-   - building libstdc++ with `-mos9call` (newlib is done, §4 "Libraries"), with `stackcall` on
-     the unwinder interfaces
-   - the assembler's default CPU (§6, "Branches within a function"): the README now documents
-     `-m68000 --pcrel` for hand-written assembly; making the binutils build default to the 68000
-     remains an option
-   - research: the Microware C 3.2 `.dbg` format for SrcDbg (§6)
-   - an upstream latent bug: an `interrupt_handler` function with an FPU and a frame of 32 KB or
-     more restores its FPU registers through a1 after restoring a1. OS-9 convention functions
-     avoid it (FPU registers first, a1 last); interrupt handlers are left unchanged to keep code
-     built without the flag identical
-   - **features without a run-time test** (an independent review): FPU register saves under
-     `-m68881`; `os9call` and `_OS9PROTO` declarations used without `-mos9call`; odd-sized
-     structs of 2, 5, 6 and 7 bytes (1 and 3 are tested); `long double` and `_Complex` on the
-     stack and returned via a0; struct return through a function pointer; the exclusion of
-     interrupt handlers; the 68881 `setjmp`/`longjmp` variants (there's no FPU multilib). CI
-     runs no tests. Since tested on OS-9 (2026-10-04, §11): float variables passed by a
-     Microware caller (widened to double), the `-mos9stkchk` overflow path, and d2-d7/a2-a5
-     after `longjmp` (also in the Level 2 harness).
-   - **no FPU multilib:** the multilibs are the default and `-mos9call`, both for the 68000, so
-     `-m68020 -m68881` programs link the 68000 newlib (soft-float, and the non-68881
-     `setjmp`). A 68020/68881 multilib would follow `t-mlibs`' CPU multilibs, which `t-elfos9`
-     replaces
-6. **Microware `cc` options without an equivalent.** Most of the native `cc`'s options (as on the
-   CD-i 605's disk, edition #44) map onto GCC, `elf2rof` or `elf2mod` options: `-A` is `-S`,
-   `-R` is `-c` (with `elf2rof` for a ROF), `-N=` is `elf2mod -n`, `-E=` is `elf2mod -e`, `-M=`
-   is `elf2mod -s`, `-NL` is `-nostdlib`, `-G` is `-g` (with `elf2mod -g` for the `.stb`, not the
-   `.dbg`), `-J` is `elf2mod` building `_jmptbl` only when needed, `-S` is the default (stack
-   checking is opt-in, `-mos9stkchk`), and the 68000/68020/68881 choices are `-m68000`,
-   `-m68020` and `-m68881`, and `-X` is now `-mos9math`. The others have none:
-   - **`-X`, floating point through the math module** (now `-mos9math`). Without `-X`,
-     Microware C calls the floating-point routines of `math.l` (`_T$DCmp` and the like); with it, it
-     traps to OS-9's math module (`trap #15`), which a CD-i player has in ROM. Microware code
-     compiled either way links with GCC code (Level 3 links `math.l` through `rof2elf`). GCC's own
-     floating point is libgcc's soft-float (`lb1sf68`), in the program, unless **`-mos9math`**
-     (2026-10-04): it links `libos9math` (newlib's `libgloss/m68k`) before libgcc, whose versions of
-     the soft-float entry points (`__adddf3` ... `__divsf3`, the comparisons, `__unord*`, and the
-     conversions between float, double, long and unsigned long) call the math trap, and a
-     constructor links the handler (`F$TLink`), as `cstart.r` does on the first trap. The
-     convention, from C 3.2's `-X` code (native `cc -a -x` on the CD-i 605): `trap #15` and the
-     function code (`T$DAdd` = 14 ... from `funcs.a`), doubles in d0:d1 and d2:d3, floats in d0 and
-     d1, the result in d0:d1 or d0, a comparison's in the condition codes; C 3.2 does float
-     arithmetic in double. The math module knows no NaNs, so `libos9math`'s comparisons check for
-     them; libgcc's exception flags (`_fpCCR`) aren't kept. `make check-os9math` (§11). The 64-bit
-     conversions stay in libgcc. **Inline traps** (2026-10-04): without an FPU, `-mos9math` makes
-     GCC emit the traps itself, as C 3.2 does with `-X`, instead of calling the soft-float entry
-     points: the backend's float expanders (`add`, `sub`, `mul`, `div`, the conversions between
-     float, double, long and unsigned long, and `cbranch`) load the operands into fixed registers
-     and emit `trap #15` and the function code, with d1 and d2:d3 as clobbers (see §11 for why
-     d2:d3). Compares are the math module's (`T$DCmp`, `T$FCmp`) whether or not NaNs are honoured,
-     as in Microware C: the module knows no NaNs, and its errors end the program rather than make
-     one, so NaNs only come from outside (bit patterns, `nan()`); only `isnan` and `isunordered`
-     (ORDERED and UNORDERED) call libgcc's `__unord<mode>2`. With an FPU (`-m68881`) the FPU is used
-     and `-mos9math` changes nothing. `libos9math`'s entry points remain for code that still calls
-     them (code compiled without `-mos9math`, and libgcc's own internal calls). Ultra C's `-x` is
-     different: it emits 68881 instructions for an F-line emulator. In C 3.2, `xcc -bp` shows what
-     `-X` is: without it, the driver gives `c68` `-t`, which turns each trap into a call of
-     `math.l`'s `_T$DAdd` and the like, and links `clibn.l` and `math.l`; with it, `c68` emits the
-     `tcall`s and the driver links `clib.l`. The cross `xcc -a -x` and the native `cc -a -x` give
-     identical assembly.
-   - **all-long offsets** (`-K=…L`, `-TP=…DL`/`…CL`): a6-relative data and code references as
-     32-bit offsets for a whole program. GCC covers large programs per object, with the
-     `remote` attribute for data beyond 64 KB and `elf2mod`'s jump table for far calls (§6),
-     but has no blanket long mode; `-mxgot`-style long data offsets would be its counterpart.
-   - **`-I`, linking with `cio`:** the shared C I/O module, whose `cio.l` stubs replace the
-     I/O in `clib.l`, so programs share one copy of stdio. Probably just a matter of linking
-     `cio.l` (converted with `rof2elf`) before `clib.l`, and of `cio` being in memory, as it is
-     on the CD-i 605; untested.
-   - **`-BG`, adhesive object modules,** and **`-TO=OS9K`** (OS-9000), which don't apply.
-
-   The DOS cross compiler of C 3.2 (`xcc`) has the same options as the native `cc`, plus
-   `-TP=CPU32`. Like the native `cc` (edition #44), its driver predefines `_OSK`, `_MPF68K` and
-   `_BIG_END` for `cpp` (and `_MPF68020` or `_MPFCPU32`, and `_FPF881` with the 68881, which
-   `-TP=020` always implies: `xcc -bp` shows `cpp -d_OSK -d_FPF881 -d_MPF68K -d_MPF68020 -d_BIG_END`
-   and `c68020 -t881` for it, and `cpp -d_OSK -d_MPF68K -d_BIG_END` by default); `cpp` itself
-   predefines `OSK` and `mc68000`. (`-d_OS9` in its tables is `-TO=OS9`'s, 6809 OS-9.) Ultra C 2.5
-   in compat mode defines `OSK`, `_OSK`, `_MPF68K`, `_BIG_END`, `mc68000`, `_UCC` and its revision,
-   and `_FPF881` even for the 68000. Since 2026-10-04 GCC on `m68k-elfos9` predefines the same as C
-   3.2 (`OSK` also as `__OSK`/`__OSK__`, and only those in strict ISO C, like `mc68000`), so
-   Microware's `stdio.h`, which tests `OSK`, works unchanged. Ultra C 2.5's `xcc -mode=compat` takes
-   the same options in lower case (`-x` "use math trap handler", `-i` "shared trap handler/library",
-   `-k=…`); in its own mode the same choices are `-tp=CPU,fp|sc|lc|sd|ld` (`fp` a static
-   floating-point library instead of the trap; 32-bit code references `lc` are *its* default, 16-bit
-   data references `sd`), `-i`, and `-c` (constant pointers in the code area).
-
-### Known minor faults and open issues
-
-From the independent review, not fixed; none affects code built in the usual way:
+None affects code built in the usual way:
 
 - **`elf2rof`, weak definitions** become ordinary ROF definitions (ROF has no weak symbols), so
-  two objects defining the same weak symbol (newlib's weak defaults, for example) would make
-  `l68` report duplicate symbols.
+  two objects defining the same weak symbol (newlib's weak defaults, for example) make `l68`
+  report duplicate symbols.
 - **`elf2rof`, alignment above 2** (`.balign 4` in `.rodata` or `.data`) is kept within a psect,
   but `l68` places psects at even addresses only, so the final module doesn't guarantee it. The
   68000 needs no more than 2.
 - **`rof2elf`, remote common definitions** (type 0x0102) become ordinary ELF common symbols,
   placed with the near data in the 64 KB a6 window instead of with the remote data.
 - **`elf2mod`, absolute code-to-code references** (`R_68K_32` or `R_68K_16` from `.text` to
-  `.text`) are accepted and keep their link-time addresses, where `l68` would write module
-  offsets. Murachue's original behaviour; only hand-written assembly produces them (GCC's
-  read-only pointer tables are data, and Microware's libraries contain none).
+  `.text`) from hand-written assembly keep their link-time addresses, where `l68` writes module
+  offsets; references from converted ROF code (`dc.w Init` in a driver's entry table) get module
+  offsets, as with `l68`.
 - **`elf2mod -g`, C 3.2 style:** flag 0x2000 goes on every symbol that a relocation refers to.
   With `ld -q`, GCC objects keep relocations against their own global symbols, so more symbols
   get it than "referred to by another psect" (`l68`) would give. It only matters when comparing
@@ -1862,7 +1521,7 @@ From the independent review, not fixed; none affects code built in the usual way
   - *OS-9 C Compiler Version 3.2 Release Notes*: <https://www.icdia.co.uk/microware/os9ccmp.pdf>
   - *OS-9/68000 User-State Debugger* (Appendix A: symbol table module format):
     <https://www.icdia.co.uk/microware/userdbg.pdf>
-- Microware LP's DMCA notice against a public copy of the OS-9/68K SDK (5 August 2026):
+- Microware LP's DMCA notice of 5 August 2026:
   <https://github.com/github/dmca/blob/master/2026/08/2026-08-05-microware.md>
 - GCC mainline mirror: <https://github.com/gcc-mirror/gcc> (base tag `releases/gcc-11.1.0`)
 - GCC AI policy: <https://gcc.gnu.org/ai-policy.html>; GNU "legally significant" changes:
