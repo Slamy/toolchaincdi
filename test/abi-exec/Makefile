@@ -97,9 +97,9 @@ CFLAGS_MW = -O2 -mpcrel -ma6rel -mos9call -mbuiltin=os9call -w
 MWTESTS   = $(basename $(notdir $(wildcard $(HERE)mwtests/*.c)))
 mwfile    = $(firstword $(wildcard $(MWLIB)/$(1) $(MWLIB)/$(shell echo $(1) | tr a-z A-Z)))
 
-$(BUILD)/rof2elf: $(HERE)../../src/elf2mod/rof2elf.c
+$(BUILD)/rof2elf: $(HERE)../../src/elf2mod/rof2elf.c $(HERE)../../src/elf2mod/r68x_note.c $(HERE)../../src/elf2mod/r68x_note.h
 	mkdir -p $(BUILD)
-	$(HOSTCC) -O2 -o $@ $<
+	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/elf2mod/r68x_note.c
 
 $(BUILD)/mw/cstart.o $(BUILD)/mw/clib.a: $(BUILD)/rof2elf
 	@[ -n "$(call mwfile,clib.l)" ] || { echo "check-mw: set MWLIB to the directory with cstart.r, clib.l and sys.l"; exit 2; }
@@ -303,9 +303,9 @@ check-lsym: $(BUILD)/lsymcheck $(LSYMVARIANTS:%=$(BUILD)/lsym/%.mod)
 #   make check-r68
 R68TESTS = $(basename $(notdir $(wildcard $(HERE)r68tests/*.a)))
 
-$(BUILD)/r68togas: $(HERE)../../src/elf2mod/r68togas.c
+$(BUILD)/r68togas: $(HERE)../../src/elf2mod/r68togas.c $(HERE)../../src/elf2mod/r68x_note.c $(HERE)../../src/elf2mod/r68x_note.h
 	mkdir -p $(BUILD)
-	$(HOSTCC) -O2 -o $@ $<
+	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/elf2mod/r68x_note.c
 
 $(BUILD)/r68/%.elf: $(HERE)tests/%.c $(HERE)r68tests/%.a $(BUILD)/r68togas $(HERE)crt0.S $(HERE)support.S \
 	$(HERE)abi.lds $(CC1) $$(wildcard $(HERE)tests/$$*.flags) $$(LIBGCC)
