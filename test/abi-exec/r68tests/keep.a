@@ -1,0 +1,28 @@
+* tests/keep.S in Microware's r68 syntax (make check-r68), with its two
+* variables in a vsect.
+
+ psect keep_a,0,0,0,0,0
+
+ vsect
+seen_a0: ds.l 1
+seen_a1: ds.l 1
+ ends
+
+* os9_inc (x): OS-9 convention, x in d0, returns x + 1 in d0; preserves
+* every other register, a0 and a1 included. It records a0 and a1, so
+* the test can check that its caller kept something there.
+os9_inc: move.l a0,seen_a0(a6)
+ move.l a1,seen_a1(a6)
+ addq.l #1,d0
+ rts
+
+* stack_trash (x): stack convention, returns x + 1, and clobbers d1, a0
+* and a1, as the stack convention allows.
+stack_trash: move.l 4(sp),d0
+ addq.l #1,d0
+ move.l #$dead0001,d1
+ move.l #$dead0002,a0
+ move.l #$dead0003,a1
+ rts
+
+ ends

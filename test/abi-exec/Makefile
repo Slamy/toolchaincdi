@@ -8,6 +8,7 @@
 #   make check-mod       run the tests as OS-9 modules made by elf2mod (see below)
 #   make check-newlib    run nltests/ with newlib, in both multilibs (see below)
 #   make check-lsym      elf2mod's btext, bname and etext (see below)
+#   make check-r68       tests with r68-syntax stubs, through r68togas (see below)
 #   make check-l68 L68=... [MWLIB=...]  run them as modules linked by
 #                        Microware's l68, through elf2rof; with MWLIB also
 #                        the Level 3 tests, with Microware's clib.l (see below)
@@ -293,6 +294,33 @@ check-lsym: $(BUILD)/lsymcheck $(LSYMVARIANTS:%=$(BUILD)/lsym/%.mod)
 	  if $(BUILD)/lsymcheck $(BUILD)/lsym/$$t.mod > $(BUILD)/lsym/$$t.log; \
 	  then echo "PASS: lsym/$$t"; else echo "FAIL: lsym/$$t"; cat $(BUILD)/lsym/$$t.log; fail=1; fi; \
 	done; exit $$fail
+
+# r68togas: tests whose assembly side is written in Microware's r68
+# syntax (r68tests/NAME.a, the same code as tests/NAME.S), translated by
+# r68togas from src/elf2mod and assembled by GNU as, as m68k-os9-r68
+# does; linked and run as the tests are.  Needs no Microware files.
+#   make check-r68
+R68TESTS = $(basename $(notdir $(wildcard $(HERE)r68tests/*.a)))
+
+$(BUILD)/r68togas: $(HERE)../../src/elf2mod/r68togas.c
+	mkdir -p $(BUILD)
+	$(HOSTCC) -O2 -o $@ $<
+
+$(BUILD)/r68/%.elf: $(HERE)tests/%.c $(HERE)r68tests/%.a $(BUILD)/r68togas $(HERE)crt0.S $(HERE)support.S \
+	$(HERE)abi.lds $(CC1) $$(wildcard $(HERE)tests/$$*.flags) $$(LIBGCC)
+	mkdir -p $(BUILD)/r68
+	$(GCC) -c $(or $(file <$(HERE)tests/$*.flags),$(CFLAGS_T)) -o $(BUILD)/r68/$*.o $(HERE)tests/$*.c
+	$(BUILD)/r68togas -m0 -o $(BUILD)/r68/$*-stubs.s $(HERE)r68tests/$*.a
+	$(TPREFIX)as -o $(BUILD)/r68/$*-stubs.o $(BUILD)/r68/$*-stubs.s
+	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/r68/crt0.o $(HERE)crt0.S
+	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/r68/support.o $(HERE)support.S
+	$(TPREFIX)ld --no-check-sections -T $(HERE)abi.lds -o $@ $(BUILD)/r68/crt0.o $(BUILD)/r68/$*.o \
+	  $(BUILD)/r68/$*-stubs.o $(BUILD)/r68/support.o $(LIBGCC)
+
+check-r68: $(BUILD)/abirun $(R68TESTS:%=$(BUILD)/r68/%.elf)
+	@fail=0; for t in $(R68TESTS); do \
+	  if $(BUILD)/abirun $(BUILD)/r68/$$t.elf; then echo "PASS: r68/$$t"; \
+	  else echo "FAIL: r68/$$t"; fail=1; fi; done; exit $$fail
 
 # OS-9 itself: the Level 3 tests (mwtests/) built with -DREAL_OS9, which
 # adds checks needing system calls (memory, files, the math trap), as real

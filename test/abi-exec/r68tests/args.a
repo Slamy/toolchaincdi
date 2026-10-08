@@ -1,0 +1,75 @@
+* tests/args.S in Microware's r68 syntax, assembled by r68togas and GNU
+* as (make check-r68): the same callees and callers, so args.c checks
+* the translation as it checks the GNU as original.
+
+ psect args_a,0,0,0,0,0
+
+* Callees, as Microware C 3.2 code would receive the arguments.
+
+mw_sub3: sub.l d1,d0 int mw_sub3 (a, b, c): a - b - c
+ sub.l 4(sp),d0
+ rts
+
+mw_dhi: add.l 4(sp),d0 int mw_dhi (double x, int y): hi(x) + y
+ rts
+
+mw_dlo: move.l d1,d0 int mw_dlo (double x): lo(x)
+ rts
+
+mw_s1: moveq #0,d0 int mw_s1 (struct { char c; } s, int i)
+ move.b 4(sp),d0 the struct is at the start of its slot
+ add.l 8(sp),d0
+ rts
+
+mw_s3: moveq #0,d0 int mw_s3 (struct { char a, b, c; } s, int i)
+ move.b 6(sp),d0 s.c
+ add.l 8(sp),d0
+ rts
+
+mw_idi: add.l 4(sp),d0 int mw_idi (int a, double b, int c): hi(b)
+ add.l 12(sp),d0 c
+ rts
+
+mw_var: sub.l d1,d0 int mw_var (fmt, ...) called with 3 ints
+ sub.l 4(sp),d0
+ rts
+
+mw_ll: move.l d1,d0 int mw_ll (long long x, int y): lo(x) + y
+ add.l 4(sp),d0
+ rts
+
+* Callers, calling GCC functions the way Microware C 3.2 code does.
+
+call_g_sub3: move.l d1,-(sp) g_sub3 (100, 20, 3); d1 kept
+ pea 3.w
+ moveq #20,d1
+ moveq #100,d0
+ bsr g_sub3
+ addq.l #4,sp
+ move.l (sp)+,d1
+ rts
+
+call_g_dhi: move.l d1,-(sp) g_dhi (1.5, 5); d1 kept
+ pea 5.w
+ move.l #$3FF80000,d0
+ moveq #0,d1
+ bsr g_dhi
+ addq.l #4,sp
+ move.l (sp)+,d1
+ rts
+
+call_g_s1: pea 100.w g_s1 ((struct s1) { 7 }, 100)
+ move.l #$07000000,-(sp) byte 7 at the start of the slot
+ bsr g_s1
+ addq.l #8,sp
+ rts
+
+call_g_idi: pea 5.w g_idi (10, 1.5, 5)
+ clr.l -(sp)
+ move.l #$3FF80000,-(sp)
+ moveq #10,d0
+ bsr g_idi
+ lea 12(sp),sp
+ rts
+
+ ends
