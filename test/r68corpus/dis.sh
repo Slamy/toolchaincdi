@@ -49,8 +49,10 @@ for s in .text .data .remote.data; do
   fi
   echo "== $s relocs"
   # a symbol defined here counts as its section (rof2elf refers to the section)
-  # (corp: sorted, as writes them backwards; a negative section addend too)
-  ${B}objdump -r -j $s "$o" 2>/dev/null | grep R_68K | awk '{print $1, $2, $3}' | sort | sed -E 's/\.(text|data|bss)([-+]0x[0-9a-f]+)?$/.\1+?/' |
+  # (corp: sorted, as writes them backwards; a negative section addend too; a 16-bit field's
+  # addend -0x8000 is +0x8000, as rof2elf and as write $8000)
+  ${B}objdump -r -j $s "$o" 2>/dev/null | grep R_68K | awk '{print $1, $2, $3}' | sort |
+    sed -E 's/\.(text|data|bss)([-+]0x[0-9a-f]+)?$/.\1+?/; s/^([0-9a-f]+ R_68K_16 [^ ]+)-0x00008000$/\1+0x00008000/' |
     awk -v map="$defined" 'BEGIN { n = split(map, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], f, " "); sec[f[1]] = f[2] } }
       { t = $3; sub(/[-+]0x.*/, "", t); if (t in sec) { if ($2 ~ /PC/) next; c = tolower(sec[t]); $3 = (c == "t" ? ".text" : c == "d" ? ".data" : c == "b" ? ".bss" : $3) "+?" } print }' |
     # a byte immediate: r68 relocates the whole extension word, as its low byte

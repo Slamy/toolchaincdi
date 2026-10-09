@@ -20,6 +20,9 @@ SYSL=${SYSL:-/path/to/sys.l}
 R68=${R68:-/path/to/r68.exe}
 RC=${RC:-/mnt/c/VDOS/RC}
 JOBS=${JOBS:-3}
+# SYS.L converted into a cache, not beside it (the tools' default, save=beside, writes libsys.a
+# into the user's kit)
+export M68K_OS9_ELF=${M68K_OS9_ELF:-save=cache,cache=$WORK/cache}
 
 name_of() {	# N PATH
 	local f=${2##*/}
