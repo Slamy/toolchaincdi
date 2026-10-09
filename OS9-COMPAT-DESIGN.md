@@ -218,6 +218,16 @@ the other OS-9 options in GCC's manual (m68k options).
 
 ### Which functions use it
 
+GCC function types do not record language linkage, so a function pointer cannot know whether
+its target is `extern "C"`. The only consistent rule the backend can apply is:
+
+> Under `-mos9call`, every call to, and definition of, a function of plain function type
+> (`FUNCTION_TYPE`) uses the OS-9 convention, whatever its linkage. That includes free functions,
+> static member functions, `extern "C"` functions, and all calls through plain function pointers.
+> Non-static member functions (`METHOD_TYPE`, which take `this`) and compiler-generated library
+> calls (libgcc helpers such as `__mulsi3` and soft-float routines) keep the normal stack
+> convention.
+
 The backend sees the function type on both sides (call sites, including indirect calls, and the
 function being compiled), so this is a simple type check. It needs no name-mangling heuristics.
 
@@ -286,6 +296,14 @@ on the stack.
 GCC-compiled functions, prototyped `char`, `short` and `float` parameters, and `float` return
 values, work normally under `-mos9call`: both sides pass a `float` as 32 bits, in d0, d1 or a
 4-byte stack slot, and return it in d0.
+
+Microware C 3.2 functions are all defined K&R-style, so they receive their arguments in promoted
+form: `char` and `short` as `int`, `float` as `double`. By the C standard, a prototype is only
+compatible with such a definition if it uses those promoted types. Prototypes *for Microware C 3.2
+functions* should therefore use `int` (or `unsigned`) and `double`, never `char`, `short` or
+`float`: `extern "C" int f(double x, int c);` rather than `(float x, char c)`. GCC can't tell which
+declarations refer to Microware functions, so it doesn't warn about this; getting such
+prototypes right is up to whoever writes them.
 
 - **`float` parameters break** when calling a Microware C 3.2 function: GCC passes a prototyped
   `float` as 32 bits, while the callee expects a double.
@@ -1087,6 +1105,9 @@ its debug support was taken from Stephan Paschedag's OS-9 port of GCC 2.5.8.
 
 ### Drop-ins for Microware's tools
 
+- **`m68k-os9-r68`**, a drop-in for Microware's `r68`: `r68togas` translates r68 syntax to GNU
+  `as` syntax, in the dialect of C 3.2's or Ultra C's assembler (`-dialect=`), and objects come
+  out as ELF or, with `-obj=rof`, as ROF.
 - **`m68k-os9-l68`** and **`m68k-os9-libgen`**, drop-ins for Microware's linker and librarian,
   linking with GNU ld and `elf2mod`, with Microware's symbol modules, jump tables and library
   member order.

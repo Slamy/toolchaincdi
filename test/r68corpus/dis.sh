@@ -1,0 +1,59 @@
+#!/bin/bash
+# dis.sh OBJ: a normalized listing for comparing r68 objects. Sections are padded to a multiple
+# of 4 (Ultra C's r68 pads code with NOPs, data with zeros). The contents come from a link of
+# the object alone (GNU as keeps relocations for branches to global symbols that rof2elf's
+# objects have resolved), the relocations from the object, less the PC-relative ones to
+# symbols it defines. (corp: .bss starts at a multiple of 4: C 3.2's R68 aligns sections to 2.)
+B=~/build/install/bin/m68k-elfos9-
+o=$1
+t=$(mktemp -d)
+cat > $t/ld.x <<'EOF'
+SECTIONS {
+  .text 0 : { *(.text) }
+  .data 0 : { *(.data) }
+  .bss ALIGN(4) : { *(.bss) }
+  .remote.data 0 : { *(.remote.data) }
+  .remote.bss ALIGN(4) : { *(.remote.bss) }
+  /DISCARD/ : { *(.comment) *(.note*) }
+}
+EOF
+${B}ld -T $t/ld.x --no-check-sections --unresolved-symbols=ignore-all -e 0 -o $t/x.elf "$o" 2>$t/err ||
+  sed "s|$o|OBJ|" $t/err | grep -v ': in function '	# (corp: which symbol ld names varies)
+echo "== sections"
+${B}objdump -h "$o" | awk '$2 ~ /^\./ && $3 != "00000000" {print $2, $3}' | grep -v '^\.comment\|^\.note\|^\.r68x' | sort |
+  while read n s; do printf '%s %08x\n' $n $(( (0x$s + 3) / 4 * 4 )); done
+echo "== globals"
+# undefined symbols only when referenced (as lists one an equ names, unreferenced)
+used=$(${B}objdump -r "$o" | awk '/R_68K/ {s = $3; sub(/[-+]0x.*/, "", s); print s}' | sort -u)
+${B}nm -g "$o" | sed 's/^ *//' | awk -v used="$used" 'BEGIN { n = split(used, u, "\n"); for (i = 1; i <= n; i++) ref[u[i]] = 1 }
+  { if (NF == 2) { if ($2 in ref) print "U", $2 } else print $2, $3, $1 }' | sort |
+  # (corp: rof2elf lists a common symbol also as undefined: the U line dropped)
+  awk '{ line[NR] = $0; if ($1 == "C") com[$2] = 1; name[NR] = $2; type[NR] = $1 }
+    END { for (i = 1; i <= NR; i++) if (!(type[i] == "U" && name[i] in com)) print line[i] }'
+defined=$(${B}nm "$o" | awk 'NF==3 {print $3, $2}')
+for s in .text .data .remote.data; do
+  ${B}objcopy -O binary -j $s $t/x.elf $t/b 2>/dev/null || continue
+  [ -s $t/b ] || continue
+  while [ $(( $(stat -c %s $t/b) % 4 )) != 0 ]; do
+    if [ $s = .text ] && [ $(( $(stat -c %s $t/b) % 2 )) = 0 ]; then printf '\x4e\x71' >> $t/b; else printf '\x00' >> $t/b; fi
+  done
+  echo "== $s"
+  if [ $s = .text ]; then
+    # Ultra C's r68 pads the code to 4 with trapf for some CPUs, nop for others: as nop
+    # (corp: zeros disassembled too; a last word of zeros, padding, as nop)
+    ${B}objdump -z -b binary -m m68k:68000 -D $t/b | grep -P '^\s+[0-9a-f]+:' | sed -E 's/[ \t]+$//' |
+      sed -E '$ s/^(\s+[0-9a-f]+:\s+)51fc\s+\.short 0x51fc$/\14e71           \tnop/' |
+      sed -E '$ s/^(\s+[0-9a-f]+:\s+)(0000\s+\.short 0x0000|Address 0x[0-9a-f]+ is out of bounds\.)$/\14e71           \tnop/'
+  else
+    od -An -tx1 -v -w16 $t/b
+  fi
+  echo "== $s relocs"
+  # a symbol defined here counts as its section (rof2elf refers to the section)
+  # (corp: sorted, as writes them backwards; a negative section addend too)
+  ${B}objdump -r -j $s "$o" 2>/dev/null | grep R_68K | awk '{print $1, $2, $3}' | sort | sed -E 's/\.(text|data|bss)([-+]0x[0-9a-f]+)?$/.\1+?/' |
+    awk -v map="$defined" 'BEGIN { n = split(map, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], f, " "); sec[f[1]] = f[2] } }
+      { t = $3; sub(/[-+]0x.*/, "", t); if (t in sec) { if ($2 ~ /PC/) next; c = tolower(sec[t]); $3 = (c == "t" ? ".text" : c == "d" ? ".data" : c == "b" ? ".bss" : $3) "+?" } print }' |
+    # a byte immediate: r68 relocates the whole extension word, as its low byte
+    if [ $s = .text ]; then perl -lane 'if ($F[1] eq "R_68K_8" && hex($F[0]) % 2) { $F[0] = sprintf("%08x", hex($F[0]) - 1); $F[1] = "R_68K_16" } print "@F"'; else cat; fi
+done
+rm -r $t
