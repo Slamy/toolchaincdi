@@ -9,6 +9,17 @@ the repository.
 
 ## Steps
 
+1. The list (Windows Python): `python psectscan.py <root> list.txt`: the `.s` files with a
+   `psect` line, one per content. Copy it to `$WORK/list.txt`.
+2. The mirror (Windows Python): `python mirror.py list.txt <mirror root> mirlist.txt`: each
+   source's directory and its two parents (text files), and every file a `use` names (any kind,
+   any subdirectory); `mirlist.txt` has the mirrored paths, line for line. Copy it to
+   `$WORK/mirlist.txt`.
+3. The defs directory `$WORK/defs`: the files the sources `use` with `<...>` (and the target's
+   `oskdefs.d`). The same files in an 8.3 directory for vDos (`RCDEFS`).
+5. C 3.2's assembler (Git Bash, with a vDos job poller running): `MIRLIST=... MIRROR=... OUT=...
+   RCDEFS=... VJOB=... bash rc.sh` (`r68`; `ASM=r68020 ASMOPTS=-m2` for its 68020 assembler).
+
 `dis.sh` makes the normalized listing that is compared: the code from a link of the object
 alone, the data, the global symbols, the relocations (sorted; PC-relative ones to symbols the
 object defines left out), sections padded to a multiple of 4 (Ultra C's `r68` pads to 4 with

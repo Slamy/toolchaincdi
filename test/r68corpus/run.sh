@@ -8,19 +8,20 @@
 #                              <n> <vs Ultra C> <vs C 3.2> <name> <path>, each SAME, DIFF, REFFAIL
 #                              (the reference didn't assemble it), USFAIL, BOTHFAIL
 # Settings (environment): WORK (default ~/build/r68corpus), LIST ($WORK/list.txt, from
-# psectscan.py), MIRLIST ($WORK/mirlist.txt, from mirror.py), DEFS ($WORK/defs), SYSL (CD-i's
-# SYS.L), R68 (Ultra C's r68.exe), RC (C 3.2's objects), JOBS (3), and PATH for m68k-os9-r68 and
-# the m68k-elfos9 binutils. Nothing is written beside the sources: Microware's assemblers run in
-# the mirror, m68k-os9-r68 (which writes nothing there) on the originals.
+# psectscan.py), MIRLIST ($WORK/mirlist.txt, from mirror.py), DEFS ($WORK/defs), SYSL (the
+# target's SYS.L), R68 (Ultra C's r68.exe), RC (C 3.2's objects, rc.sh's OUT as a WSL path),
+# JOBS (3), and PATH for m68k-os9-r68 and the m68k-elfos9 binutils. SYSL, R68 (for ucc) and RC
+# (for ours) have no default. Nothing is written beside the sources: Microware's assemblers run
+# in the mirror, m68k-os9-r68 (which writes nothing there) on the originals.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 WORK=${WORK:-$HOME/build/r68corpus}
 LIST=${LIST:-$WORK/list.txt}
 MIRLIST=${MIRLIST:-$WORK/mirlist.txt}
 DEFS=${DEFS:-$WORK/defs}
-SYSL=${SYSL:-/path/to/sys.l}
-R68=${R68:-/path/to/r68.exe}
-RC=${RC:-/mnt/c/VDOS/RC}
+SYSL=${SYSL:?SYSL: the target's SYS.L (WSL path)}
+R68=${R68:-}
+RC=${RC:-}
 JOBS=${JOBS:-3}
 # SYS.L converted into a cache, not beside it (the tools' default, save=beside, writes libsys.a
 # into the user's kit)
@@ -48,6 +49,7 @@ ucc() {	# in the mirror: Microware's assemblers have left temp files in their di
 	/mnt/[a-z]/*" "/mnt/[a-z]/*) ;;
 	*) echo "run.sh ucc: WORK and DEFS must be on a Windows drive (/mnt/c/...), for r68.exe" >&2; exit 1;;
 	esac
+	[ -n "$R68" ] || { echo "run.sh ucc: R68: Ultra C's r68.exe (WSL path)" >&2; exit 1; }
 	mkdir -p "$WORK/ucc"
 	entries 1 999999 | while read -r n w; do
 		m=$(tr -d '\r' < "$MIRLIST" | sed -n "${n}p")
@@ -89,6 +91,7 @@ case ${1:-} in
 ucc)
 	ucc ;;
 ours)
+	[ -n "$RC" ] || { echo "run.sh ours: RC: C 3.2's objects (rc.sh's OUT, WSL path)" >&2; exit 1; }
 	out=$WORK/$2
 	shift 2
 	rm -rf "$out"
