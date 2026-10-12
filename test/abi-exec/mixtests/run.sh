@@ -3,7 +3,7 @@
 # by GCC with -mos9call, linked both ways and run on OS-9:
 #   l68    Microware's cc links mwside.r with gccside.r (elf2rof) on OS-9
 #   ld     GNU ld links gccside.o with mwside.r (copied up, rof2elf), with
-#          cstart.r, clib.l and math.l (rof2elf), then elf2mod
+#          cstart.r, clib.l, math.l and sys.l (rof2elf), then elf2mod
 #   mismatch  as ld, with gccside.c built -DMISMATCH_FLOAT: m10's float
 #          argument goes unwidened, which must fail just that one check
 # Run by the Makefile (make check-os9mix), which passes the variables below.
@@ -12,7 +12,7 @@
 # low 8 bits on the way here).
 set -e
 : "${HERE:?}" "${BUILD:?}" "${GCC:?}" "${CDIRUN:?}" "${CFLAGS_MW:?}" "${CSTART:?}" "${CLIB:?}" \
-  "${MATHL:?}" "${SYSL:?}" "${LIBGCC:?}"
+  "${MATHL:?}" "${SYSL:?}" "${SYSA:?}" "${LIBGCC:?}"
 TPREFIX=${TPREFIX:-m68k-elfos9-}
 
 work=$BUILD/os9mix
@@ -56,8 +56,8 @@ step -t 0 "cc -fd=mixl68 $OS9_CCFLAGS mwside.r gccside.r"
 ${TPREFIX}ranlib math.a
 for m in mixld:gccside.o mixmis:gccmis.o; do
 	mod=${m%%:*}
-	${TPREFIX}ld -q --no-check-sections -T "$HERE/../l68cmp/mod.lds" -o "$mod.elf" \
-	  "$CSTART" "${m#*:}" mwside.o --start-group "$CLIB" math.a --end-group "$LIBGCC"
+	sh "$HERE/r68xld.sh" ${TPREFIX}ld -q --no-check-sections -T "$HERE/../l68cmp/mod.lds" -o "$mod.elf" \
+	  "$CSTART" "${m#*:}" mwside.o --start-group "$CLIB" math.a --end-group "$LIBGCC" "$SYSA"
 	"$BUILD/elf2mod" -n "$mod" "$mod.elf" "$mod" > /dev/null
 done
 step -dc mixld mixmis

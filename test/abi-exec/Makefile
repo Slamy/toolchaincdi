@@ -101,12 +101,17 @@ $(BUILD)/rof2elf: $(HERE)../../src/elf2mod/rof2elf.c $(HERE)../../src/elf2mod/r6
 	mkdir -p $(BUILD)
 	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/elf2mod/r68x_note.c
 
-$(BUILD)/mw/cstart.o $(BUILD)/mw/clib.a: $(BUILD)/rof2elf
+# sys.l too, as an archive: rof2elf leaves its equates (F$Exit, E$BMode)
+# external where a relocation takes them, as r68 does, so a link needs
+# it, as l68's does.
+$(BUILD)/mw/cstart.o $(BUILD)/mw/clib.a $(BUILD)/mw/sys.a: $(BUILD)/rof2elf
 	@[ -n "$(call mwfile,clib.l)" ] || { echo "check-mw: set MWLIB to the directory with cstart.r, clib.l and sys.l"; exit 2; }
 	mkdir -p $(BUILD)/mw
 	$(BUILD)/rof2elf -e $(call mwfile,sys.l) -o $(BUILD)/mw/cstart.o $(call mwfile,cstart.r)
 	$(BUILD)/rof2elf -e $(call mwfile,sys.l) -o $(BUILD)/mw/clib.a $(call mwfile,clib.l)
 	$(TPREFIX)ranlib $(BUILD)/mw/clib.a
+	$(BUILD)/rof2elf -o $(BUILD)/mw/sys.a $(call mwfile,sys.l)
+	$(TPREFIX)ranlib $(BUILD)/mw/sys.a
 
 # The harness's crt0 is the entry point (abirun has no OS-9 system
 # calls for cstart's startup), so cstart only provides its variables and
@@ -116,11 +121,11 @@ $(BUILD)/mw/cstart-sub.o: $(BUILD)/mw/cstart.o
 	$(TPREFIX)objcopy -w --strip-symbol='__os9_*' $< $@
 
 $(BUILD)/mw/%.elf: $(HERE)mwtests/%.c $(HERE)crt0.S $(HERE)abi.lds $(CC1) $(BUILD)/mw/cstart-sub.o $(BUILD)/mw/clib.a \
-	$$(wildcard $(HERE)mwtests/$$*.flags) $$(LIBGCC)
+	$(BUILD)/mw/sys.a $$(wildcard $(HERE)mwtests/$$*.flags) $$(LIBGCC)
 	$(GCC) -c $(or $(file <$(HERE)mwtests/$*.flags),$(CFLAGS_MW)) -o $(BUILD)/mw/$*.o $<
 	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/mw/crt0.o $(HERE)crt0.S
-	$(TPREFIX)ld --no-check-sections -T $(HERE)abi.lds -o $@ $(BUILD)/mw/crt0.o $(BUILD)/mw/$*.o \
-	  $(BUILD)/mw/cstart-sub.o $(BUILD)/mw/clib.a $(LIBGCC)
+	sh $(HERE)r68xld.sh $(TPREFIX)ld --no-check-sections -T $(HERE)abi.lds -o $@ $(BUILD)/mw/crt0.o $(BUILD)/mw/$*.o \
+	  $(BUILD)/mw/cstart-sub.o $(BUILD)/mw/clib.a $(LIBGCC) $(BUILD)/mw/sys.a
 
 check-mw: $(BUILD)/abirun $(MWTESTS:%=$(BUILD)/mw/%.elf)
 	@fail=0; for t in $(MWTESTS); do \
@@ -374,11 +379,11 @@ CDIRUN_FLAGS ?=
 OS9TESTS      = $(MWTESTS)
 
 $(BUILD)/os9/%: $(HERE)mwtests/%.c $(HERE)../l68cmp/mod.lds $(CC1) $(BUILD)/mw/cstart.o $(BUILD)/mw/clib.a \
-	$(BUILD)/elf2mod $$(wildcard $(HERE)mwtests/$$*.flags) $$(LIBGCC)
+	$(BUILD)/mw/sys.a $(BUILD)/elf2mod $$(wildcard $(HERE)mwtests/$$*.flags) $$(LIBGCC)
 	mkdir -p $(BUILD)/os9
 	$(GCC) -c -DREAL_OS9 $(or $(file <$(HERE)mwtests/$*.flags),$(CFLAGS_MW)) -o $@.o $<
-	$(TPREFIX)ld -q --no-check-sections -T $(HERE)../l68cmp/mod.lds -o $@.elf \
-	  $(BUILD)/mw/cstart.o $@.o $(BUILD)/mw/clib.a $(LIBGCC)
+	sh $(HERE)r68xld.sh $(TPREFIX)ld -q --no-check-sections -T $(HERE)../l68cmp/mod.lds -o $@.elf \
+	  $(BUILD)/mw/cstart.o $@.o $(BUILD)/mw/clib.a $(LIBGCC) $(BUILD)/mw/sys.a
 	$(BUILD)/elf2mod -n $* $@.elf $@ > /dev/null
 	if [ -f $(HERE)mwtests/$*.status ]; then cp $(HERE)mwtests/$*.status $@.want; \
 	  else rm -f $@.want; fi
@@ -410,10 +415,11 @@ check-os9: $(OS9TESTS:%=$(BUILD)/os9/%)
 #   make check-os9mix MWLIB=DIR [CDIRUN=...] [CDIRUN_FLAGS=...] [OS9_CCFLAGS=...]
 OS9_CCFLAGS ?=
 
-check-os9mix: $(BUILD)/elf2rof $(BUILD)/rof2elf $(BUILD)/elf2mod $(BUILD)/mw/cstart.o $(BUILD)/mw/clib.a $(CC1)
+check-os9mix: $(BUILD)/elf2rof $(BUILD)/rof2elf $(BUILD)/elf2mod $(BUILD)/mw/cstart.o $(BUILD)/mw/clib.a \
+	$(BUILD)/mw/sys.a $(CC1)
 	@HERE=$(HERE) BUILD=$(BUILD) GCC="$(GCC)" TPREFIX=$(TPREFIX) CFLAGS_MW="$(CFLAGS_MW)" \
 	  CDIRUN="$(CDIRUN)" CDIRUN_FLAGS="$(CDIRUN_FLAGS)" OS9_CCFLAGS="$(OS9_CCFLAGS)" \
-	  CSTART=$(BUILD)/mw/cstart.o CLIB=$(BUILD)/mw/clib.a \
+	  CSTART=$(BUILD)/mw/cstart.o CLIB=$(BUILD)/mw/clib.a SYSA=$(BUILD)/mw/sys.a \
 	  MATHL=$(call mwfile,math.l) SYSL=$(call mwfile,sys.l) LIBGCC=$(LIBGCC) \
 	  sh $(HERE)mixtests/run.sh
 
