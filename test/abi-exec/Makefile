@@ -107,8 +107,8 @@ $(BUILD)/rof2elf: $(HERE)../../src/elf2mod/rof2elf.c $(HERE)../../src/elf2mod/r6
 $(BUILD)/mw/cstart.o $(BUILD)/mw/clib.a $(BUILD)/mw/sys.a: $(BUILD)/rof2elf
 	@[ -n "$(call mwfile,clib.l)" ] || { echo "check-mw: set MWLIB to the directory with cstart.r, clib.l and sys.l"; exit 2; }
 	mkdir -p $(BUILD)/mw
-	$(BUILD)/rof2elf -e $(call mwfile,sys.l) -o $(BUILD)/mw/cstart.o $(call mwfile,cstart.r)
-	$(BUILD)/rof2elf -e $(call mwfile,sys.l) -o $(BUILD)/mw/clib.a $(call mwfile,clib.l)
+	$(BUILD)/rof2elf -o $(BUILD)/mw/cstart.o $(call mwfile,cstart.r)
+	$(BUILD)/rof2elf -o $(BUILD)/mw/clib.a $(call mwfile,clib.l)
 	$(TPREFIX)ranlib $(BUILD)/mw/clib.a
 	$(BUILD)/rof2elf -o $(BUILD)/mw/sys.a $(call mwfile,sys.l)
 	$(TPREFIX)ranlib $(BUILD)/mw/sys.a
@@ -228,9 +228,9 @@ check-newlib:
 #   make check-l68 L68=/mnt/c/path/to/DOS/BIN/l68.exe [MWLIB=/path/to/LIB]
 L68 ?=
 
-$(BUILD)/elf2rof: $(HERE)../../src/elf2mod/elf2rof.c
+$(BUILD)/elf2rof: $(HERE)../../src/elf2mod/elf2rof.c $(HERE)../../src/elf2mod/r68x_note.c $(HERE)../../src/elf2mod/r68x_note.h
 	mkdir -p $(BUILD)
-	$(HOSTCC) -O2 -o $@ $<
+	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/elf2mod/r68x_note.c
 
 $(BUILD)/libgcc.l: $(BUILD)/elf2rof $$(LIBGCC)
 	$(BUILD)/elf2rof -o $@ $(LIBGCC)
@@ -420,7 +420,7 @@ check-os9mix: $(BUILD)/elf2rof $(BUILD)/rof2elf $(BUILD)/elf2mod $(BUILD)/mw/cst
 	@HERE=$(HERE) BUILD=$(BUILD) GCC="$(GCC)" TPREFIX=$(TPREFIX) CFLAGS_MW="$(CFLAGS_MW)" \
 	  CDIRUN="$(CDIRUN)" CDIRUN_FLAGS="$(CDIRUN_FLAGS)" OS9_CCFLAGS="$(OS9_CCFLAGS)" \
 	  CSTART=$(BUILD)/mw/cstart.o CLIB=$(BUILD)/mw/clib.a SYSA=$(BUILD)/mw/sys.a \
-	  MATHL=$(call mwfile,math.l) SYSL=$(call mwfile,sys.l) LIBGCC=$(LIBGCC) \
+	  MATHL=$(call mwfile,math.l) LIBGCC=$(LIBGCC) \
 	  sh $(HERE)mixtests/run.sh
 
 # OS-9 itself, Level 2: the check-mod modules (tests/ and modtests/, at

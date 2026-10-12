@@ -8,10 +8,10 @@
 #                              <n> <vs Ultra C> <vs C 3.2> <name> <path>, each SAME, DIFF, REFFAIL
 #                              (the reference didn't assemble it), USFAIL, BOTHFAIL
 # Settings (environment): WORK (default ~/build/r68corpus), LIST ($WORK/list.txt, from
-# psectscan.py), MIRLIST ($WORK/mirlist.txt, from mirror.py), DEFS ($WORK/defs), SYSL (the
-# target's SYS.L), R68 (Ultra C's r68.exe), RC (C 3.2's objects, rc.sh's OUT as a WSL path),
-# JOBS (3), and PATH for m68k-os9-r68 and the m68k-elfos9 binutils. SYSL, R68 (for ucc) and RC
-# (for ours) have no default. Nothing is written beside the sources: Microware's assemblers run
+# psectscan.py), MIRLIST ($WORK/mirlist.txt, from mirror.py), DEFS ($WORK/defs), R68 (Ultra
+# C's r68.exe), RC (C 3.2's objects, rc.sh's OUT as a WSL path), JOBS (3), and PATH for
+# m68k-os9-r68, rof2elf and the m68k-elfos9 binutils. R68 (for ucc) and RC (for ours) have no
+# default. Nothing is written beside the sources: Microware's assemblers run
 # in the mirror, m68k-os9-r68 (which writes nothing there) on the originals.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -19,11 +19,10 @@ WORK=${WORK:-$HOME/build/r68corpus}
 LIST=${LIST:-$WORK/list.txt}
 MIRLIST=${MIRLIST:-$WORK/mirlist.txt}
 DEFS=${DEFS:-$WORK/defs}
-SYSL=${SYSL:?SYSL: the target's SYS.L (WSL path)}
 R68=${R68:-}
 RC=${RC:-}
 JOBS=${JOBS:-3}
-# SYS.L converted into a cache, not beside it (the tools' default, save=beside, writes libsys.a
+# libraries converted into a cache, not beside them (the tools' default, save=beside, writes
 # into the user's kit)
 export M68K_OS9_ELF=${M68K_OS9_ELF:-save=cache,cache=$WORK/cache}
 
@@ -70,17 +69,17 @@ ours_range() {	# OUT FROM TO OPTS...
 		name=$(name_of "$n" "$w")
 		o=$out/$name
 		rm -f "$o".*
-		(cd "${l%/*}" && timeout 60 m68k-os9-r68 "${l##*/}" -q "$@" -u="$DEFS" -sysl="$SYSL" -o="$o.us.o") \
+		(cd "${l%/*}" && timeout 60 m68k-os9-r68 "${l##*/}" -q "$@" -u="$DEFS" -o="$o.us.o") \
 			> "$o.us.log" 2>&1 < /dev/null
 		[ -f "$o.us.o" ] && bash "$here/dis.sh" "$o.us.o" > "$o.us.dis" 2>&1
 		if [ -s "$WORK/ucc/$name.r" ]; then
-			rof2elf -e "$SYSL" -o "$o.mw.o" "$WORK/ucc/$name.r" > /dev/null 2>&1 &&
+			rof2elf -o "$o.mw.o" "$WORK/ucc/$name.r" > /dev/null 2>&1 &&
 				bash "$here/dis.sh" "$o.mw.o" > "$o.mw.dis" 2>&1
 		fi
 		r32=$(printf '%s/%04d.R' "$RC" "$n")
 		[ -f "$r32" ] || r32=$(printf '%s/%04d.r' "$RC" "$n")
 		if [ -s "$r32" ]; then
-			rof2elf -e "$SYSL" -o "$o.c32.o" "$r32" > /dev/null 2>&1 &&
+			rof2elf -o "$o.c32.o" "$r32" > /dev/null 2>&1 &&
 				bash "$here/dis.sh" "$o.c32.o" > "$o.c32.dis" 2>&1
 		fi
 		echo "$n $(cmp_ref "$o.mw.dis" "$o.us.dis") $(cmp_ref "$o.c32.dis" "$o.us.dis") $name $w" >> "$out/results"

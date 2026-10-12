@@ -12,7 +12,7 @@
 # low 8 bits on the way here).
 set -e
 : "${HERE:?}" "${BUILD:?}" "${GCC:?}" "${CDIRUN:?}" "${CFLAGS_MW:?}" "${CSTART:?}" "${CLIB:?}" \
-  "${MATHL:?}" "${SYSL:?}" "${SYSA:?}" "${LIBGCC:?}"
+  "${MATHL:?}" "${SYSA:?}" "${LIBGCC:?}"
 TPREFIX=${TPREFIX:-m68k-elfos9-}
 
 work=$BUILD/os9mix
@@ -51,8 +51,8 @@ step -dc gccside.r
 step -t 0 "cc -fd=mixl68 $OS9_CCFLAGS mwside.r gccside.r"
 
 # ld: linked by GNU ld, and the mismatch.
-"$BUILD/rof2elf" -e "$SYSL" -o mwside.o up/mwside.r
-"$BUILD/rof2elf" -e "$SYSL" -o math.a "$MATHL"
+"$BUILD/rof2elf" -o mwside.o up/mwside.r
+"$BUILD/rof2elf" -o math.a "$MATHL"
 ${TPREFIX}ranlib math.a
 for m in mixld:gccside.o mixmis:gccmis.o; do
 	mod=${m%%:*}

@@ -51,10 +51,13 @@ wsl.exe -d Ubuntu --exec bash -c "set -e
   B=\$HOME/build/abi-exec
   make -s -C '$(wslpath "$here/../abi-exec")' \$B/rof2elf \$B/elf2mod \$B/elf2rof > /dev/null
   export PATH=\$HOME/build/install/bin:\$PATH
-  for f in cstart.r prog.r clib.l; do \$B/rof2elf -e sys.l -o \${f%.?}.\${f##*.}o \$f; done
+  for f in cstart.r prog.r clib.l sys.l; do \$B/rof2elf -o \${f%.?}.\${f##*.}o \$f; done
   mkdir mem; cd mem; m68k-elfos9-ar x ../clib.lo \$(cat ../members); cd ..
-  m68k-elfos9-ld -q --no-check-sections -T '$(wslpath "$here/mod.lds")' \
-    -o g.elf cstart.ro prog.ro \$(sed 's|^|mem/|' members)
+  # sys.l's equates stay external, as l68 resolves them: the library, and
+  # the link-time expressions' definitions (r68xld.sh)
+  m68k-elfos9-ranlib sys.lo
+  sh '$(wslpath "$here/../abi-exec/r68xld.sh")' m68k-elfos9-ld -q --no-check-sections \
+    -T '$(wslpath "$here/mod.lds")' -o g.elf cstart.ro prog.ro \$(sed 's|^|mem/|' members) sys.lo
   \$B/elf2mod -n prog -u $owner $stb g.elf gprog > /dev/null
   # The round trip: the ELF objects back to ROF.
   \$B/elf2rof -o cstart2.r cstart.ro

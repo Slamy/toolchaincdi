@@ -875,6 +875,7 @@ From the *OS-9 Assembler/Linker User Manual*, chapter 3 ("Relocatable Program Se
 | 2-byte data references (a6-relative) | `R_68K_16` | must agree with the -0x8000 bias in the linker script |
 | 4-byte references | `R_68K_32` | in `.data`: pointers, which `elf2mod` relocates at load time. In code: link-time constants, i.e. a6-relative data offsets (`move.l #_iob,a1` then `adda.l a6,a1` in `cstart.r`) or equates, which come out right with the -0x8000 data bias; `elf2mod` accepts these |
 | relative 1/2/4 bytes | `R_68K_PC8`/`PC16`/`PC32` | |
+| negative references | `R_68K_PC32` when paired | an external reference paired with a negated reference to the same ROF's code is a PC-relative value (`cstart.r`'s `jsr (pc,dN.l)` calls); several externals added and subtracted at one place become a link-time expression (`r68x_<hash>`, defined by the link front ends from the object's `.r68x` notes; `m68k-os9-l68.md`); with one added local reference (a label plus equates) the expression names that section by an alias (`r68l_<psect>_<section>`); other combinations are rejected; no equate is folded in |
 | common symbols | ELF COMMON | |
 | addend in the instruction bytes | RELA addend | |
 | mainline header (type, attributes, edition, stack, entry) | absolute and code symbols `__os9_typelang`, `__os9_attrev`, `__os9_edition`, `__os9_stack`, `__os9_entry`, `__os9_trapent` | |

@@ -17,8 +17,15 @@ the repository.
    `$WORK/mirlist.txt`.
 3. The defs directory `$WORK/defs`: the files the sources `use` with `<...>` (and the target's
    `oskdefs.d`). The same files in an 8.3 directory for vDos (`RCDEFS`).
+4. Ultra C's `r68` (WSL): `R68=<r68.exe> bash run.sh ucc`. `WORK` and `DEFS` must
+   be on a Windows drive (`/mnt/c/...`): `r68.exe` can't use `\\wsl.localhost\...` paths for
+   `-u` and `-o`.
 5. C 3.2's assembler (Git Bash, with a vDos job poller running): `MIRLIST=... MIRROR=... OUT=...
    RCDEFS=... VJOB=... bash rc.sh` (`r68`; `ASM=r68020 ASMOPTS=-m2` for its 68020 assembler).
+6. Ours, compared with both (WSL, `m68k-os9-r68` and the `m68k-elfos9` binutils in `PATH`):
+   `RC=<OUT as a WSL path> bash run.sh ours r1` (Ultra C's dialect) and `... bash
+   run.sh ours r2 -dialect=c32`. `python diffkinds.py <work>/r1 mw` (or `c32`) groups the
+   differences by instruction.
 
 `dis.sh` makes the normalized listing that is compared: the code from a link of the object
 alone, the data, the global symbols, the relocations (sorted; PC-relative ones to symbols the
