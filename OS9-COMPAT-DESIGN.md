@@ -34,6 +34,7 @@ The [`Dockerfile`](Dockerfile) builds, from the pinned submodules under `src/`:
 
 | Component | Source | Notes |
 |---|---|---|
+| binutils 2.35 | [cdifan/binutils-gdb](https://github.com/cdifan/binutils-gdb) `m68k-gas-fixes` | upstream 2.35 with four gas fixes (§2); the target name is accepted through generic m68k patterns |
 | GCC 11.1.0 | [cdifan/gcc](https://github.com/cdifan/gcc) `11.1.0-os9-compat` (Murachue's `11.1.0-os9` plus this work) | `-mpcrel`, `-ma6rel`, `-mbsrw` (§2), and the OS-9 options (§4) |
 | newlib 4.1.0 | [cdifan/newlib-cygwin](https://github.com/cdifan/newlib-cygwin) `newlib-4.1.0-os9-compat` | multilibs for both conventions, and an OS-9 runtime in libgloss (§4) |
 | m68k-os9-tools | [cdifan/m68k-os9-tools](https://github.com/cdifan/m68k-os9-tools) `main-compat` | a heavily extended fork of Murachue's elf2mod: `elf2mod` (linked ELF → OS-9 module), `rof2elf`, `elf2rof` (§6), and the drop-ins for Microware's tools |
@@ -1307,6 +1308,7 @@ Development happens in forks under [github.com/cdifan][cdifan]:
   `-ma6rel` defines `__A6REL__`). Both change code built without `-mos9call`, so Level 0 compares
   with Murachue's branch plus these fixes (§11). They're AI-assisted, like the rest of the fork:
   whether to take them is Murachue's call.
+- **`cdifan/binutils-gdb`**: branch `m68k-gas-fixes`, upstream 2.35 with the four gas fixes (§2).
 - **`cdifan/newlib-cygwin`** (forked from `murachue/newlib-cygwin`): branch
   `newlib-4.1.0-os9-compat`, with the os9call `setjmp`/`longjmp`, `libos9math` and the OS-9
   runtime (§4, "Libraries").

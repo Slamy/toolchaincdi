@@ -1,7 +1,7 @@
 [submodule "binutils-gdb"]
 	path = src/binutils-gdb
-	url = https://github.com/murachue/binutils-gdb.git
-	branch = binutils-2_35-branch
+	url = https://github.com/cdifan/binutils-gdb.git
+	branch = m68k-gas-fixes
 [submodule "gcc"]
 	path = src/gcc
 	url = https://github.com/cdifan/gcc.git

@@ -22,6 +22,7 @@ own branch, next to Murachue's unchanged one where Murachue's repository has one
 | Submodule | Repository | Branch |
 |---|---|---|
 | `src/gcc` | [cdifan/gcc](https://github.com/cdifan/gcc) | `11.1.0-os9-compat` (`11.1.0-os9` is Murachue's) |
+| `src/binutils-gdb` | [cdifan/binutils-gdb](https://github.com/cdifan/binutils-gdb) | `m68k-gas-fixes` |
 | `src/newlib-cygwin` | [cdifan/newlib-cygwin](https://github.com/cdifan/newlib-cygwin) | `newlib-4.1.0-os9-compat` |
 
 # Ingredients
