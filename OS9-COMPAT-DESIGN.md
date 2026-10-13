@@ -103,6 +103,18 @@ The argument-passing hooks (`function_arg_info`) are the same from GCC 10 throug
 work's `-mos9call` (§4) would port nearly unchanged. It is implemented on GCC 11.1, the fork's
 baseline; a port to GCC 17 is a separate step (§12).
 
+binutils needs no OS-9 support: the `elfos9` name is accepted through generic patterns. The
+pinned commit is upstream 2.35 with four small gas fixes (`cdifan/binutils-gdb`, branch
+`m68k-gas-fixes`, meant for upstream). Two are for m68k, and both bugs are still in 2.47:
+`e9931c69c` exempts every `m68k-*-elf*` OS from `EXTERN_FORCE_RELOC`, as `configure.tgt` treats
+them as plain ELF (otherwise references to a file's own global symbols are left to the linker),
+and `a85af34fb` lets a `(d8,PC,Xn)` byte displacement be 0 or -1 (the check for a short branch's
+offset caught it too). Two are generic, for alignment in r68 sources translated by `r68togas`
+(not yet checked against 2.47): `77b0033e1` emits an alignment's padding at once where its
+position in the section is already known, so a conditional after it can use the distance across
+it, and `2518eed3a` keeps MRI mode from word-aligning at `rept` and `irp`, which emit nothing
+themselves.
+
 ## 3. Microware C calling convention
 
 ### What the manual says
