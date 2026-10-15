@@ -1,7 +1,7 @@
 #!/bin/bash
 # dis.sh OBJ: a normalized listing for comparing r68 objects. Sections are padded to a multiple
 # of 4 (Ultra C's r68 pads code with NOPs, data with zeros). The contents come from a link of
-# the object alone (GNU as keeps relocations for branches to global symbols that rof2elf's
+# the object alone (gas keeps relocations for branches to global symbols that rof2elf's
 # objects have resolved), the relocations from the object, less the PC-relative ones to
 # symbols it defines. (corp: .bss starts at a multiple of 4: C 3.2's R68 aligns sections to 2.)
 B=~/build/install/bin/m68k-elfos9-
@@ -56,8 +56,8 @@ for s in .text .data .remote.data; do
   fi
   echo "== $s relocs"
   # a symbol defined here counts as its section (rof2elf refers to the section)
-  # (corp: sorted, as writes them backwards; a negative section addend too; a 16-bit field's
-  # addend -0x8000 is +0x8000, as rof2elf and as write $8000)
+  # (corp: sorted, gas writes them backwards; a negative section addend too; a 16-bit field's
+  # addend -0x8000 is +0x8000, as rof2elf and gas write $8000)
   ${B}objdump -r -j $s "$o" 2>/dev/null | grep R_68K | awk '{print $1, $2, $3}' | sort |
     sed -E 's/\.(text|data|bss)([-+]0x[0-9a-f]+)?$/.\1+?/; s/^([0-9a-f]+ R_68K_16 [^ ]+)-0x00008000$/\1+0x00008000/' |
     awk -v map="$defined" 'BEGIN { n = split(map, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], f, " "); sec[f[1]] = f[2] } }
