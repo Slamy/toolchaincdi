@@ -61,8 +61,6 @@ for s in .text .data .remote.data; do
   ${B}objdump -r -j $s "$o" 2>/dev/null | grep R_68K | awk '{print $1, $2, $3}' | sort |
     sed -E 's/\.(text|data|bss)([-+]0x[0-9a-f]+)?$/.\1+?/; s/^([0-9a-f]+ R_68K_16 [^ ]+)-0x00008000$/\1+0x00008000/' |
     awk -v map="$defined" 'BEGIN { n = split(map, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], f, " "); sec[f[1]] = f[2] } }
-      { t = $3; sub(/[-+]0x.*/, "", t); if (t in sec) { if ($2 ~ /PC/) next; c = tolower(sec[t]); $3 = (c == "t" ? ".text" : c == "d" ? ".data" : c == "b" ? ".bss" : $3) "+?" } print }' |
-    # a byte immediate: r68 relocates the whole extension word, as its low byte
-    if [ $s = .text ]; then perl -lane 'if ($F[1] eq "R_68K_8" && hex($F[0]) % 2) { $F[0] = sprintf("%08x", hex($F[0]) - 1); $F[1] = "R_68K_16" } print "@F"'; else cat; fi
+      { t = $3; sub(/[-+]0x.*/, "", t); if (t in sec) { if ($2 ~ /PC/) next; c = tolower(sec[t]); $3 = (c == "t" ? ".text" : c == "d" ? ".data" : c == "b" ? ".bss" : $3) "+?" } print }'
 done
 rm -r $t

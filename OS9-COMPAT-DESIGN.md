@@ -1483,6 +1483,10 @@ the user's own (`MWLIB=…`).
   With `MWLIB=…`, the Level 3 tests too, linked with Microware's original `clib.l`; `cstart.r`
   goes through `rof2elf` and back without its `__os9_*` symbols, so it isn't a second root psect
   (the harness's `crt0` is the entry, as with `check-mw`).
+- **The tools:** the tests of m68k-os9-tools (`tests/r68` and the others) check `r68togas`,
+  `gastor68`, the drop-ins and the converters against Microware's tools, case by case.
+  `test/r68corpus` compares the translation of r68 sources with Microware's assemblers on a large
+  set of sources.
 
 ### Where tests live
 

@@ -60,6 +60,7 @@ own branch, next to Murachue's unchanged one where Murachue's repository has one
   CD-i Emulator or a real CD-i player (`make check-os9` and the others).
 - `test/l68cmp`: links compared with Microware's `l68`.
 - `test/os9c`: Microware C probes, for the calling convention and for stack checking.
+- `test/r68corpus`: r68 sources compared with Microware's assemblers.
 
 # How to use?
 
