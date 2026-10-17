@@ -6,6 +6,8 @@ This is a fork of [murachue/toolchaincdi](https://github.com/murachue/toolchainc
 everything Murachue built kept as it is. It adds interoperability with Microware's OS-9 C
 compilers, assemblers, linkers and libraries:
 
+- GCC options for Microware's calling conventions (`-mos9call`, `-mos9call=ucc`), stack checking
+  (`-mos9stkchk`), line ends (`-mos9newline`), OS-9's math module (`-mos9math`) and more;
 - newlib built for both calling conventions, with an OS-9 runtime;
 - drop-ins for Microware's compiler drivers, assembler, linker and librarian, which run existing
   makefiles with GCC and the GNU tools, and converters between Microware's ROF objects and ELF:

@@ -361,12 +361,32 @@ rules apply to *all* arguments, named or not, and the default argument promotion
   it's a declaration for functions implemented elsewhere, which is exactly the Microware case.
   In C, the unprototyped `f()` gives the same calls.
 
+This matches every Microware C 3.2 caller, and Microware C 3.2's variadic library functions too
+(confirmed by running them, below). It deliberately differs from Ultra C 2.5's own mode, which
+`-mos9call=ucc` follows instead.
+
 Dual ANSI/K&R headers from that era show why this matters in practice. They wrap declarations in
 a prototype macro that expands to the full parameter list for an ANSI compiler and to `()` for
 Microware C 3.2. So GCC sees real variadic prototypes (`printf`-style functions, file creation
 with optional arguments, and so on), while the implementations behind them were compiled K&R-style
 and expect positional arguments. Passing variadic calls like K&R calls is exactly what makes GCC
 calls to those functions work.
+
+**Ultra C's placement: `-mos9call=ucc`.** Ultra C 2.5 in its own ANSI mode puts all of a variadic
+call's unnamed arguments on the stack, and its variadic functions read them from there (measured
+on both sides with a probe compiled by Ultra C's `xcc`); everything else matches `-mos9call`
+(float passed and returned as float in d0, double in d0:d1, struct return through a0).
+`-mos9call=ucc` places them so, for code linked with Ultra C's libraries (`m68k-os9-ucc`), and
+defines `__OS9CALL_UCC__`; `-mos9call=c32` is `-mos9call`. The two differ only for a variadic
+function with exactly one named argument that is a scalar of up to 4 bytes (in d0 alone: `c32`
+passes the first unnamed argument in d1 if it is a scalar of up to 4 bytes), or with no named
+argument (`f(...)`: `c32` passes the first ones in d0/d1). With two named arguments, or a first
+one that is a double or an aggregate, the unnamed ones are on the stack either way. With
+`-mos9call=ucc`, `va_list` is a plain pointer, as Ultra C's.
+
+`-mos9call=` applies to a whole compilation. Ultra C's own headers need no per-function form: the
+exec/fork family isn't variadic (`os9exec`, `os9fork`, `os9forkc` and the `execv` functions), and
+`execl`/`execle` have two named arguments.
 
 **Callee side.** A variadic function *defined* with `-mos9call` must find its first arguments in
 d0/d1. Only one case needs more than a stack pointer: a function with exactly one named argument,
@@ -795,6 +815,7 @@ Where the convention lives in the GCC 11 tree (`gcc/config/m68k/`, unless noted)
 
 | Where | GCC's purpose | What it does under the OS-9 convention |
 |---|---|---|
+| `m68k.h`:<br>`TARGET_CPU_CPP_BUILTINS` | predefined macros | `__OS9CALL__`, `__OS9CALL_UCC__`, `__OS9NEWLINE__`, `__OS9MATH__`, `__A6REL__`, Microware's names |
 | `m68k.h`:<br>`CUMULATIVE_ARGS`<br>`INIT_CUMULATIVE_ARGS` | per-call argument-scanning state | whether the call uses the OS-9 convention (one predicate, given the function type and its attribute; libcalls, `METHOD_TYPE` and `interrupt_handler` functions keep the stack convention), the argument position, and where arg 1 went |
 | `m68k.h`:<br>`FUNCTION_ARG_REGNO_P` | which registers can carry arguments | d0 and d1, under `-mos9call` or once an `os9call` attribute has been applied in the translation unit, so code using neither is unchanged (Level 0) |
 | `m68k_function_arg`<br>`m68k_function_arg_advance` | where an argument goes | the positional rules, named and unnamed arguments alike |
@@ -1483,6 +1504,9 @@ the user's own (`MWLIB=…`).
   With `MWLIB=…`, the Level 3 tests too, linked with Microware's original `clib.l`; `cstart.r`
   goes through `rof2elf` and back without its `__os9_*` symbols, so it isn't a second root psect
   (the harness's `crt0` is the entry, as with `check-mw`).
+- **Ultra C's convention:** `make check-ucc MWOS=… UCCWORK=…` links `-mos9call=ucc` code with
+  code compiled by Ultra C's own `xcc` (variadic calls both ways) and runs it in the Level 2
+  emulator; `make check-lsym` checks `elf2mod`'s `btext`, `bname` and `etext`.
 - **The tools:** the tests of m68k-os9-tools (`tests/r68` and the others) check `r68togas`,
   `gastor68`, the drop-ins and the converters against Microware's tools, case by case.
   `test/r68corpus` compares the translation of r68 sources with Microware's assemblers on a large
@@ -1492,6 +1516,30 @@ the user's own (`MWLIB=…`).
 
 Tests live under `test/` in this repository, outside `src/`: the `Dockerfile` copies `src/` into
 the build, and tests don't belong in the image.
+
+```
+test/
+├── os9c/          the Microware C probes and their Microware C 3.2 / Ultra C 2.5 outputs
+├── baseline/      Level 0: the compile-and-diff script
+├── dejagnu/       Level 1: the compile-only DejaGnu board (the tests are in the GCC tree)
+├── l68cmp/        Level 3: elf2mod, rof2elf and elf2rof compared with Microware's linker
+├── r68corpus/     r68 sources translated and compared with Microware's assemblers
+└── abi-exec/      Levels 2 and 3: emulator harness, assembly stubs and tests
+    ├── tests/     Level 2 tests, each with its assembly stubs
+    ├── modtests/  far calls through elf2mod's jump table (and l68's)
+    ├── nltests/   newlib, in both multilibs
+    ├── r68tests/  Level 2 stubs in r68 syntax
+    ├── mwtests/   Level 3: tests linked with Microware's converted C library
+    ├── mixtests/  Level 3: Microware C 3.2 and GCC code linked together
+    ├── os9tests/  Level 3: floating point on OS-9
+    ├── ucctests/  GCC code linked with Ultra C's (-mos9call=ucc)
+    ├── lsymtests/ elf2mod's linker-defined symbols
+    └── musashi/   68000 emulator library (submodule)
+```
+
+The DejaGnu tests are in the GCC tree, where GCC's test framework expects them, and the tool
+tests in m68k-os9-tools. Microware tools and libraries are used only locally and are never
+committed (§7).
 
 ## 12. Open questions
 
@@ -1504,6 +1552,10 @@ the build, and tests don't belong in the image.
   as rs6000 does with `#pragma longcall`), for prototyped headers only GCC reads, which could then
   be wrapped whole around an `#include`. It wouldn't replace `_OS9PROTO` in headers shared with
   Microware C 3.2.
+- **Mixing variadic placements in one compilation:** `-mos9call=` applies to a whole compilation.
+  If code built with one placement must call a variadic function of the other kind with one named
+  argument or none, the cheapest form is an optional argument to the attribute,
+  `__attribute__((os9call("c32")))` or `os9call("ucc")`; none such is known.
 - **All-long offsets** (C 3.2's `-k=…l`, Ultra C's `-tp=…ld`/`…lc`): a6-relative data and code
   references as 32-bit offsets for a whole program. Long data could reuse the `remote` machinery
   (an option making all of a file's data remote); long code could use `bsr.l` on the 68020 and a

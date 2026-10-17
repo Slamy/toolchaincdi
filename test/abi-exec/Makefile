@@ -5,6 +5,8 @@
 #   make check           run the tests at -O0, -O2, -Os and -O3, and with
 #                        -m68020 -m68881 on an emulated 68040
 #   make check-mw MWLIB=DIR  also link with Microware's C library (see below)
+#   make check-ucc MWOS=... UCCWORK=...  -mos9call=ucc code calling, and
+#                        called by, code Ultra C compiled (see below)
 #   make check-mod       run the tests as OS-9 modules made by elf2mod (see below)
 #   make check-newlib    run nltests/ with newlib, in both multilibs (see below)
 #   make check-lsym      elf2mod's btext, bname and etext (see below)
@@ -131,6 +133,37 @@ check-mw: $(BUILD)/abirun $(MWTESTS:%=$(BUILD)/mw/%.elf)
 	@fail=0; for t in $(MWTESTS); do \
 	  if $(BUILD)/abirun $(BUILD)/mw/$$t.elf; then echo "PASS: mw/$$t"; \
 	  else echo "FAIL: mw/$$t"; fail=1; fi; done; exit $$fail
+
+# Ultra C's convention (-mos9call=ucc): ucctests/NAME.c, compiled by GCC,
+# linked with ucctests/NAME-mw.c compiled by Microware Ultra C's own xcc
+# (ANSI mode, -r: no stack checking, so no library), and run.  Ultra C is
+# proprietary and not included: MWOS is its MWOS tree as a Windows path,
+# UCCWORK a directory on a Windows drive (/mnt/c/...) where xcc runs,
+# through cmd.exe (it can't be run from WSL directly); its output is
+# converted with rof2elf and removed there.
+#   make check-ucc MWOS='C:\path\to\mwos' UCCWORK=/mnt/c/path/to/dir
+UCCWORK  ?=
+CFLAGS_UCC = -O2 -mpcrel -ma6rel -mos9call=ucc -w
+UCCTESTS  = $(filter-out %-mw,$(basename $(notdir $(wildcard $(HERE)ucctests/*.c))))
+
+$(BUILD)/ucc/%-mw.o: $(HERE)ucctests/%-mw.c $(BUILD)/rof2elf
+	@[ -n "$(MWOS)" ] && [ -n "$(UCCWORK)" ] || { echo "check-ucc: set MWOS (Ultra C's MWOS tree, a Windows path) and UCCWORK (a directory on a Windows drive)"; exit 2; }
+	mkdir -p $(BUILD)/ucc $(UCCWORK)
+	cp $< $(UCCWORK)/$*-mw.c
+	cd $(UCCWORK) && cmd.exe /c 'set PATH=$(MWOS)\DOS\BIN;%PATH%&& set MWOS=$(MWOS)&& xcc -e=as -r -to=osk -tp=68k $*-mw.c' < /dev/null
+	$(BUILD)/rof2elf -o $@ $(UCCWORK)/$*-mw.r
+	rm -f $(UCCWORK)/$*-mw.c $(UCCWORK)/$*-mw.r
+
+$(BUILD)/ucc/%.elf: $(HERE)ucctests/%.c $(BUILD)/ucc/%-mw.o $(HERE)crt0.S $(HERE)abi.lds $(CC1) $$(LIBGCC)
+	$(GCC) -c $(CFLAGS_UCC) -o $(BUILD)/ucc/$*.o $<
+	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/ucc/crt0.o $(HERE)crt0.S
+	$(TPREFIX)ld --no-check-sections -T $(HERE)abi.lds -o $@ $(BUILD)/ucc/crt0.o $(BUILD)/ucc/$*.o \
+	  $(BUILD)/ucc/$*-mw.o $(LIBGCC)
+
+check-ucc: $(BUILD)/abirun $(UCCTESTS:%=$(BUILD)/ucc/%.elf)
+	@fail=0; for t in $(UCCTESTS); do \
+	  if $(BUILD)/abirun $(BUILD)/ucc/$$t.elf; then echo "PASS: ucc/$$t"; \
+	  else echo "FAIL: ucc/$$t"; fail=1; fi; done; exit $$fail
 
 # Modules: the tests linked with -q, converted by elf2mod (from
 # src/elf2mod, with the BFD library under BFDPATH) and run as OS-9 modules
