@@ -912,6 +912,9 @@ From the *OS-9 Assembler/Linker User Manual*, chapter 3 ("Relocatable Program Se
 | common symbols | ELF COMMON | |
 | addend in the instruction bytes | RELA addend | |
 | mainline header (type, attributes, edition, stack, entry) | absolute and code symbols `__os9_typelang`, `__os9_attrev`, `__os9_edition`, `__os9_stack`, `__os9_entry`, `__os9_trapent` | |
+| debug information | `.r68dbg` (not allocated), its references in `.rela.r68dbg` | see "`.dbg` source-level information" |
+
+More:
 
 - **Long calls:** GNU `ld` doesn't build Microware's `_jmptbl` jump table for calls beyond ±32K;
   `elf2mod` does (see "Large programs").
@@ -1138,7 +1141,26 @@ when the `.r` files contain debug information. `roff.c` writes a `.dbg` with a m
 the program CRC (at offset 6), followed by the collected debug sections; by Hunt's announcement,
 its debug support was taken from Stephan Paschedag's OS-9 port of GCC 2.5.8.
 
+Measured with the DOS-hosted cross tools (§7), and supported by `r68togas`, `elf2rof`, `rof2elf`
+and `elf2mod` (their documents):
+- C 3.2's `c68 -g` writes the information as assembler lines `debug.b`, `debug.w`, `debug.l` (a
+  source's types, symbols with their places, and line records `debug.w 1` / `debug.l *,<value>`,
+  the value's upper bits the source line as far as seen), which both Microware assemblers put into
+  the ROF's debug area, after the remote data, its size in the header field at offset 52; words
+  and longs at even offsets in it, its end not padded. References located in it have both
+  location bits (`$0220`, Hunt's `ROFF_LOC_DEBUG`).
+- The assemblers write an external's references in the order made and the local references as
+  two lists (those made in the psect, then in vsects), each in reverse order of making, debug
+  lines among them; `elf2rof` follows this through `r68togas`'s records.
+
+Source-level debugging of GCC's code with SrcDbg would need GCC's DWARF translated into the
+records `c68 -g` writes (§12).
+
 ### Drop-ins for Microware's tools
+
+The m68k-os9-tools repository also has drop-ins for Microware's compiler drivers, assembler,
+linker and librarian, so existing makefiles build with GCC and the GNU tools; each has its own
+document there:
 
 - **`m68k-os9-r68`**, a drop-in for Microware's `r68`: `r68togas` translates r68 syntax to GNU
   `as` syntax, in the dialect of C 3.2's or Ultra C's assembler (`-dialect=`), and objects come
@@ -1562,6 +1584,9 @@ committed (§7).
   32-bit PC-relative sequence on the 68000 (`move.l #target-*,dN` + `jsr (pc,dN.l)`, as
   `cstart.r` does), which would also lift the ±32 KB limit on branches within a function (§6).
   How Ultra C and C 3.2's `c68` handle long code offsets is to be checked first.
+- **SrcDbg:** translating GCC's DWARF into the records `c68 -g` writes (lines, nesting, locals and
+  parameters, register variables, structs, unions, enums, typedefs, arrays, pointers), for
+  source-level debugging of GCC's code (§6).
 - **The math module's errors:** the *OS-9 Technical Manual* says the math module returns
   ±infinity or 0 before trapping, so an `F$STrap` TRAPV handler resuming after the `trapv` could
   give IEEE-like results instead of ending the program.
