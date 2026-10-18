@@ -4,8 +4,8 @@
 # the object alone (gas keeps relocations for branches to global symbols that rof2elf's
 # objects have resolved), the relocations from the object, less the PC-relative ones to
 # symbols it defines. (corp: .bss starts at a multiple of 4: C 3.2's R68 aligns sections to 2.)
-# .r68ord (r68togas's order records for elf2rof and elf2mod; rof2elf writes it only for some
-# ROFs) is left out of the section list.
+# .r68ord and .r68pcm (r68togas's order records and code field notes for elf2rof and elf2mod;
+# rof2elf writes .r68ord only for some ROFs, .r68pcm never) are left out of the section list.
 B=~/build/install/bin/m68k-elfos9-
 o=$1
 t=$(mktemp -d)
@@ -22,7 +22,7 @@ EOF
 ${B}ld -T $t/ld.x --no-check-sections --unresolved-symbols=ignore-all -e 0 -o $t/x.elf "$o" 2>$t/err ||
   sed "s|$o|OBJ|" $t/err | grep -v ': in function '	# (corp: which symbol ld names varies)
 echo "== sections"
-${B}objdump -h "$o" | awk '$2 ~ /^\./ && $3 != "00000000" {print $2, $3}' | grep -v '^\.comment\|^\.note\|^\.r68x\|^\.r68ord' | sort |
+${B}objdump -h "$o" | awk '$2 ~ /^\./ && $3 != "00000000" {print $2, $3}' | grep -v '^\.comment\|^\.note\|^\.r68x\|^\.r68ord\|^\.r68pcm' | sort |
   while read n s; do printf '%s %08x\n' $n $(( (0x$s + 3) / 4 * 4 )); done
 echo "== globals"
 # undefined symbols: referenced by a relocation (U); a link-time expression's term, named only
