@@ -1169,6 +1169,10 @@ document there:
   linking with GNU ld and `elf2mod`, with Microware's symbol modules, jump tables and library
   member order.
 
+The way back is `gastor68`, a translator rather than a drop-in: it turns GCC's assembler output
+into r68 syntax, for `xcc -a` and for Microware's assembler. `r68togas | gastor68 | r68` gives
+r68's object, and `gastor68 | r68togas | as` gives `as`'s.
+
 ## 7. Microware tools used for testing
 
 > **Copyright notice.** Microware OS-9 and its development tools are proprietary. Microware LP,

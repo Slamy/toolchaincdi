@@ -177,11 +177,11 @@ BFDPATH  ?= $(HOME)/build/install/x86_64-pc-linux-gnu/m68k-elfos9
 JMPTBL    = 60
 MODTESTS  = $(basename $(notdir $(wildcard $(HERE)modtests/*.c)))
 
-$(BUILD)/elf2mod: $(HERE)../../src/elf2mod/elf2mod.c
+$(BUILD)/elf2mod: $(HERE)../../src/elf2mod/elf2mod.c $(HERE)../../src/elf2mod/r68x_note.c $(HERE)../../src/elf2mod/r68x_note.h
 	mkdir -p $(BUILD)
 	tr -d '\r' < $< > $(BUILD)/elf2mod.c
-	$(HOSTCC) -O2 -w -I$(BFDPATH)/include -o $@ $(BUILD)/elf2mod.c \
-	  $(BFDPATH)/lib/libbfd.a -liberty -lz -ldl
+	$(HOSTCC) -O2 -w -I$(BFDPATH)/include -I$(HERE)../../src/elf2mod -o $@ $(BUILD)/elf2mod.c \
+	  $(HERE)../../src/elf2mod/r68x_note.c $(BFDPATH)/lib/libbfd.a -liberty -lz -ldl
 
 $(BUILD)/%.mod: $(BUILD)/%.elf $(BUILD)/elf2mod
 	$(TPREFIX)ld -q --no-check-sections -T $(HERE)abi.lds -o $(BUILD)/$*.qelf \
@@ -336,8 +336,8 @@ check-lsym: $(BUILD)/lsymcheck $(LSYMVARIANTS:%=$(BUILD)/lsym/%.mod)
 
 # r68togas: tests whose assembly side is written in Microware's r68
 # syntax (r68tests/NAME.a, the same code as tests/NAME.S), translated by
-# r68togas from src/elf2mod and assembled by GNU as, as m68k-os9-r68
-# does; linked and run as the tests are.  Needs no Microware files.
+# m68k-os9-r68 built from src/elf2mod (r68togas, GNU as, the object's
+# names); linked and run as the tests are.  Needs no Microware files.
 #   make check-r68
 R68TESTS = $(basename $(notdir $(wildcard $(HERE)r68tests/*.a)))
 
@@ -345,12 +345,20 @@ $(BUILD)/r68togas: $(HERE)../../src/elf2mod/r68togas.c $(HERE)../../src/elf2mod/
 	mkdir -p $(BUILD)
 	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/elf2mod/r68x_note.c
 
-$(BUILD)/r68/%.elf: $(HERE)tests/%.c $(HERE)r68tests/%.a $(BUILD)/r68togas $(HERE)crt0.S $(HERE)support.S \
+# m68k-os9-r68, the front end that runs r68togas and gas and gives the
+# object's symbols their names back (one named like a register is NAME__r68
+# for gas), as it assembles r68 sources
+OS9SRC  := $(HERE)../../src/elf2mod
+FE_SRCS := $(addprefix $(OS9SRC)/,os9conv.c os9link.c hostsys.c r68x_note.c asmsyntax.c)
+$(BUILD)/m68k-os9-r68: $(OS9SRC)/m68k-os9-r68.c $(FE_SRCS) $(wildcard $(OS9SRC)/*.h) $(BUILD)/r68togas
+	mkdir -p $(BUILD)
+	$(HOSTCC) -O2 -I/usr/include/libiberty -o $@ $< $(FE_SRCS) -liberty
+
+$(BUILD)/r68/%.elf: $(HERE)tests/%.c $(HERE)r68tests/%.a $(BUILD)/m68k-os9-r68 $(HERE)crt0.S $(HERE)support.S \
 	$(HERE)abi.lds $(CC1) $$(wildcard $(HERE)tests/$$*.flags) $$(LIBGCC)
 	mkdir -p $(BUILD)/r68
 	$(GCC) -c $(or $(file <$(HERE)tests/$*.flags),$(CFLAGS_T)) -o $(BUILD)/r68/$*.o $(HERE)tests/$*.c
-	$(BUILD)/r68togas -m0 -o $(BUILD)/r68/$*-stubs.s $(HERE)r68tests/$*.a
-	$(TPREFIX)as -o $(BUILD)/r68/$*-stubs.o $(BUILD)/r68/$*-stubs.s
+	$(BUILD)/m68k-os9-r68 -q -m0 $(HERE)r68tests/$*.a -o=$(BUILD)/r68/$*-stubs.o
 	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/r68/crt0.o $(HERE)crt0.S
 	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/r68/support.o $(HERE)support.S
 	$(TPREFIX)ld --no-check-sections -T $(HERE)abi.lds -o $@ $(BUILD)/r68/crt0.o $(BUILD)/r68/$*.o \
@@ -362,20 +370,19 @@ check-r68: $(BUILD)/abirun $(R68TESTS:%=$(BUILD)/r68/%.elf)
 	  else echo "FAIL: r68/$$t"; fail=1; fi; done; exit $$fail
 
 # gastor68: the tests' C side compiled to assembler (-S), translated to
-# r68 syntax by gastor68 and back by r68togas, assembled by GNU as, and run
+# r68 syntax by gastor68, assembled by m68k-os9-r68 (r68togas, GNU as), and run
 # as the tests are; at -O0 and -O2.
 #   make check-gastor68
 $(BUILD)/gastor68: $(HERE)../../src/elf2mod/gastor68.c
 	mkdir -p $(BUILD)
 	$(HOSTCC) -O2 -o $@ $<
 
-$(BUILD)/g68/%.elf: $(HERE)tests/%.c $(HERE)tests/%.S $(BUILD)/gastor68 $(BUILD)/r68togas $(HERE)crt0.S \
+$(BUILD)/g68/%.elf: $(HERE)tests/%.c $(HERE)tests/%.S $(BUILD)/gastor68 $(BUILD)/m68k-os9-r68 $(HERE)crt0.S \
 	$(HERE)support.S $(HERE)abi.lds $(CC1) $$(wildcard $(HERE)tests/$$*.flags) $$(LIBGCC)
 	mkdir -p $(BUILD)/g68
 	$(GCC) -S $(or $(file <$(HERE)tests/$*.flags),$(CFLAGS_T)) -o $(BUILD)/g68/$*.s $(HERE)tests/$*.c
 	$(BUILD)/gastor68 -o $(BUILD)/g68/$*.a $(BUILD)/g68/$*.s
-	$(BUILD)/r68togas -m$(if $(findstring 68020,$(CFLAGS_T)),2,0) -o $(BUILD)/g68/$*.r68.s $(BUILD)/g68/$*.a
-	$(TPREFIX)as -o $(BUILD)/g68/$*.o $(BUILD)/g68/$*.r68.s
+	$(BUILD)/m68k-os9-r68 -q -m$(if $(findstring 68020,$(CFLAGS_T)),2,0) $(BUILD)/g68/$*.a -o=$(BUILD)/g68/$*.o
 	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/g68/$*-stubs.o $(HERE)tests/$*.S
 	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/g68/crt0.o $(HERE)crt0.S
 	$(TPREFIX)as -m68000 --pcrel -o $(BUILD)/g68/support.o $(HERE)support.S
