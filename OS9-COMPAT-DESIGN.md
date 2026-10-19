@@ -604,6 +604,8 @@ strings have no escapes, so a line break in one stays a line feed.
 
 - **`-mbuiltin=stackcall|os9call`** chooses the convention of the runtime functions libgcc also
   calls ("Libraries" below).
+- **`-mspanreg=d2`…`d7`, `a2`…`a4`** keeps a register free for Microware's long branches to
+  externals (§6, "Branches within a function").
 - **`-mos9math`**: floating point through OS-9's math module, as Microware C's `-x` ("Floating
   point" below).
 - **The `remote` attribute** places data beyond the 64 KB a6 window (§6, "Data beyond 64 KB").
@@ -1029,6 +1031,21 @@ linker. Here `elf2mod` does it, after linking, which keeps binutils unchanged, a
 - **Converted Microware objects** call externals with `bsr.w` and rely on this mechanism, so it
   covers them too.
 
+**As `l68 -a` does it** (`m68k-os9-l68.md`): `m68k-os9-l68`, the drop-in for Microware's `l68`,
+links with GNU ld and builds the module with `elf2mod`, and with `-a` it reproduces Microware's
+table byte for byte where the inputs are the same:
+- **The entries' order** is Ultra C's `l68`'s: by the object of a target's first far reference,
+  in link order; among one object's new targets, those the files given define first, then those
+  of the `-l=` libraries in their order; then by name.
+- **The pointers to the entries** come first in `M$IRefs`, in reverse order of the entries,
+  before the objects' own pointers (the objects in reverse link order; see `m68k-os9-l68.md`).
+- **Spare entries:** Microware's `l68` sizes the table by an estimate made in its first pass (its
+  `-j` prints it, as `Jumptable information: guess=… Actual=…`), and the entries beyond the used
+  ones are `jmp 0`. The estimate's rule is not known (§12): in small links it equals the used
+  count. `-jmptblpad=<n>` adds the spare entries by hand where a byte-identical link needs them.
+- **The symbol module** flags each name that a far reference uses through the table (0x1000, see
+  "Debug symbols" below).
+
 #### Branches within a function
 
 The jump table only covers calls and address loads. Branches *within* a function are limited to
@@ -1047,6 +1064,17 @@ this is a documented limitation; such functions are very rare. The same applies 
 `-freorder-blocks-and-partition`, which moves cold code to `.text.unlikely` and reaches it with
 conditional branches: it's disabled by default for this target, and should stay off for large
 programs.
+
+**Microware's way for far branches to externals** (Ultra C's `r68 -bt`): Ultra C's `xcc`
+assembles its compiler's output with `-bt`, and the source names a scratch register with
+`spanreg d7`. A branch to an external, whatever its size, then becomes long: on a 68000
+`move.l #target-*,d7` (an `R_68K_PC32` reference) and `jsr` or `jmp 0(pc,d7.l)`, a conditional one
+the opposite condition's short branch around them. `m68k-os9-r68` does the same. For GCC's code
+that goes through Microware's assembler (`gastor68`, `xcc -a`), GCC's `-mspanreg=d2`…`d7` or
+`a2`…`a4` keeps the register free and marks the file (`.set __os9_spanreg,N`), and `gastor68` in
+Ultra C mode writes the `spanreg` line and leaves every branch unsized (C 3.2's `r68` has no
+`-bt`; there it warns). This covers calls and branches to other objects; branches within a
+function keep the limit above.
 
 **Pitfall, the assembler's default CPU:** run by hand, `m68k-elfos9-as` defaults to a 68020-class
 CPU, despite the `--with-cpu=68000` passed to the binutils build. It then silently turns far
@@ -1113,19 +1141,32 @@ builds the program module and its CRC anyway, so it writes the `.stb` from the l
 table (`elf2mod -g`, `elf2mod.md`). What the manual doesn't say, from `roff.c` and from comparisons
 with Ultra C's `l68 -g` and Microware C 3.2's `l68 -g` (`test/l68cmp`), all reproduced:
 
+- data symbol values are a6-relative, including the 0x8000 bias, and from `$8000` to `$FFFF`
+  sign-extended from 16 bits (a data area beyond 32 KB); code symbol values are offsets from the
+  start of the module
 - the type flag 0x2000 marks the symbols the linker defines: `btext`, `bname`, `etext` (code,
   0x2004), `end` and `_jmptbl` (data, 0x2001); `elf2mod` adds them with l68's values. `_jmptbl`
   only in modules that may have a jump table (the program header's layout: programs, trap
   handlers, `-i` system modules), not in drivers, descriptors or file managers
+- the type flag 0x1000, with both linkers, on each name that a far reference uses through the jump
+  table (`-a`); an alias at the same address that isn't used so doesn't get it (measured with
+  Ultra C's `l68`, C 3.2's `l68` and the native `l68` editions 50, 62 and 64)
 - the two linkers differ, so `elf2mod` has two styles: C 3.2's l68 (the default) also flags the
   symbols other psects refer to, and lists equal values in reverse definition order; Ultra C's
   l68 also defines `_btext`, `_bname`, `_etext`, `_bdata`/`bdata` and `_enddata`, lists equal
   values in definition order, and puts the symbol module's header parity at offset 0x28 rather
   than 0x2E (`--stb=ucc`); entries with the same value are ordered by object, as each linker
   defines them
+- the module header's symbol field (offset 0x1C) points to the STB header; the symbol module's own
+  attributes and revision are `$8001`, whatever the program's
 - the module owner comes from the `GRPUSER` environment variable, with both linkers (1.0 if
   unset; the native OS-9 `l68` takes the process's owner); `elf2mod` reads it too (0.0 if unset),
   and has `--owner`
+- the byte after an odd-length symbol module name, which `l68` leaves as it happens to be (no rule
+  found, §12; `-stbnamepad=<hex>` sets it)
+- a global `equ` of a label (`name: equ label`) is a data symbol of value 0 in C 3.2's symbol
+  modules, which is a bug of C 3.2's assembler (it does so with any `equ` of a label); `elf2mod`
+  writes the label's value
 
 `test/l68cmp/run.sh` links the same ROFs with `l68` and with `rof2elf`, GNU ld (in l68's order)
 and `elf2mod`: the symbol modules list the same symbols, and the program modules are identical
@@ -1149,6 +1190,11 @@ and `elf2mod` (their documents):
   the ROF's debug area, after the remote data, its size in the header field at offset 52; words
   and longs at even offsets in it, its end not padded. References located in it have both
   location bits (`$0220`, Hunt's `ROFF_LOC_DEBUG`).
+- `l68 -g` writes `OUTFILE.dbg` next to the symbol module (in `STB` if there's one) where some
+  psect has a debug area: C 3.2's `$BEEFCAFE`, a zero word, the module's CRC as a long (Hunt's
+  layout), then the psects' areas in link order, references to code resolved to module offsets,
+  to data to a6-relative offsets; Ultra C's `$CAFEBEEF`, the word 3, the CRC, a zero long, the
+  same areas. Older Ultra C versions wrote 1 instead of 3 there; `l68 -dbgversion=<n>` sets it.
 - The assemblers write an external's references in the order made and the local references as
   two lists (those made in the psect, then in vsects), each in reverse order of making, debug
   lines among them; `elf2rof` follows this through `r68togas`'s records.
@@ -1213,12 +1259,28 @@ r68's object, and `gastor68 | r68togas | as` gives `as`'s.
   - **Native `cc`** inside CD-i Emulator (§9).
 
   Either one confirms the §3 results with the original compiler.
+- **Native OS-9 assemblers and linkers of several editions**, run in CD-i Emulator (§9): `r68`
+  editions 44, 66 and 67, `r68020` edition 95, `l68` editions 50, 62 and 64. The assembler and
+  linker cases of the tests (`tests/r68` in m68k-os9-tools) give the same results with our tools in
+  each dialect as with the Microware tools of that dialect, apart from known and documented
+  differences. Running several editions in one session needs care: the tools are ghost modules
+  (attributes `$C0`), which stay in memory after their last unlink, so each edition gets a module
+  name of its own.
 
 ### Microware's other host tools
 
+Microware's host tools besides the compiler, assembler and linker (from their usage texts), and
+what this toolchain has for each:
+
 | Tool | What it does | Here |
 |---|---|---|
+| `fixmod` | fixes or updates a module's header fields, parity and CRC | none; `elf2mod` sets these when it builds a module |
+| `ident` | lists a module's header information, checking its CRC | none |
+| `mkdatmod` | packages a file into a data module (images, colour tables, fonts) | none |
+| `rdump` | dumps ROF objects (`.r`) and libraries (`.l`) | `rof2elf -l`, in part |
+| `libgen` | the librarian | `m68k-os9-libgen` |
 | `r68` | the assembler | `m68k-os9-r68` |
+| `deasm` | disassembles modules and objects | GNU `objdump -d` (ELF only; no OS-9 trap names) |
 
 ## 8. Build and host environments
 
@@ -1256,6 +1318,22 @@ The toolchain also runs natively on Windows, without WSL or Docker:
   through `pex_one` as GCC's driver does, with what the hosts do differently in one file
   (`hostsys.c`): drive letters, file names regardless of case, replacing a file (`MoveFileEx`),
   the temporary directory. That is why they're C rather than shell scripts.
+- **One build description:** the Windows builds of the tools use m68k-os9-tools' own Makefile, as
+  the Linux build does, with only the compiler and the libraries' paths given.
+- **The C runtime:** the tools link against `msvcrt.dll` (and `KERNEL32.dll`) only. Their format
+  strings use only conversions every C runtime has (`%d`, `%u`, `%x`, `%ld`, `%lu`, `%lx`; values
+  cast to `long` or `unsigned long`, enough for a 32-bit target's addresses and sizes), so they
+  don't need MinGW's ANSI stdio (`__USE_MINGW_ANSI_STDIO`).
+- **The `m68k-os9-` names** are symbolic links on Linux; on Windows `make install` makes copies
+  (`LN=cp`).
+- **Short names:** the front ends also work under their short names (`xcc`, `cc`, `ucc`, `l68`,
+  `r68`, `libgen`; `m68k-os9-xcc.md`, "Finding the tools"). The Windows package is meant to carry
+  the full names only, for a directory on `PATH` (no clash with Microware's tools or a host GCC),
+  with a batch file that makes the short names in a directory the user chooses, as hard links
+  (`mklink /H`) or copies, never overwriting an existing file unless told to (§12).
+- **Long paths:** the conversion cache mirrors a converted library's full path below the cache
+  directory, so with a long cache path and a long library path the name can pass Windows'
+  260-character limit (`MAX_PATH`); the conversion then fails. A short cache directory avoids it.
 - **The tests stay POSIX** (Makefiles, shell scripts, Musashi, DejaGnu): on Windows they run
   under WSL or MSYS2. Windows programs (`cdirun.exe`, Ultra C's `l68.exe`) are called from WSL.
 
@@ -1591,6 +1669,8 @@ committed (§7).
 - **SrcDbg:** translating GCC's DWARF into the records `c68 -g` writes (lines, nesting, locals and
   parameters, register variables, structs, unions, enums, typedefs, arrays, pointers), for
   source-level debugging of GCC's code (§6).
+- **`l68`'s jump table estimate** (its spare entries) and the byte after an odd-length symbol
+  module name: no rule found; `-jmptblpad=` and `-stbnamepad=` set them by hand (§6).
 - **The math module's errors:** the *OS-9 Technical Manual* says the math module returns
   ±infinity or 0 before trapping, so an `F$STrap` TRAPV handler resuming after the `trapv` could
   give IEEE-like results instead of ending the program.

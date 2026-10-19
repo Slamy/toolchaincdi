@@ -71,6 +71,88 @@ C with GCC's options and newlib; `CDI_TEST.APP` is a program written for Microwa
 function in r68 assembler, built with the C 3.2 compiler driver's options, as an old makefile
 would build it.
 
+```
+$ cat <<'EOF' | sed 's/^    /\t/' > Makefile
+all: build.bin
+
+build.bin: build.cat build/CDI_TEST.APP build/HELLO build/ABSTRACT.TXT build/COPYRGHT.TXT build/BIBLIOGR.TXT
+    psxbuild --cuefile build.cat build
+
+# GCC's options; compiled, linked with newlib's OS-9 runtime and made into a module in one step
+# (-Wm,-g: also the debugger's symbol module, build/HELLO.stb)
+build/HELLO: hello.c
+    m68k-os9-gcc -Os -o $@ $< -Wm,-g
+
+# Microware C 3.2's xcc options, with your own copy of its headers and libraries
+build/CDI_TEST.APP: RELS/game.r RELS/twice.r
+    m68k-os9-xcc $^ -f=$@ -n=cdi_test -m=8
+
+RELS/%.r: %.c
+    m68k-os9-xcc -r=RELS $<
+
+RELS/%.r: %.a
+    m68k-os9-xcc -r=RELS $<
+EOF
+$ cat <<EOF > hello.c
+#include <stdio.h>
+
+int main(void)
+{
+    printf("hello from GCC and newlib\n");
+    return 0;
+}
+EOF
+$ cat <<EOF > game.c
+#include <stdio.h>
+
+extern int twice();
+
+main()
+{
+    printf("twice 21 is %d\n", twice(21));
+}
+EOF
+$ cat <<EOF > twice.a
+ psect twice_a,0,0,0,0,0
+* int twice(n): n in d0, the result in d0 (Microware C's convention)
+twice: add.l d0,d0
+ rts
+ ends
+EOF
+$ mkdir build RELS
+$ echo 'this is a test.' > build/ABSTRACT.TXT
+$ echo 'public domain' > build/COPYRGHT.TXT
+$ echo 'cdifan/toolchaincdi' > build/BIBLIOGR.TXT
+$ cat <<EOF > build.cat
+volume {
+    system_id [CD-RTOS CD-BRIDGE]
+    volume_id [TEST]
+    volume_set_id [TEST]
+    publisher_id [YOURNAME]
+    preparer_id [YOURNAME]
+    application_id [CDI_TEST.APP;1]
+    copyright_file_id [COPYRGHT.TXT;1]
+    abstract_file_id [ABSTRACT.TXT;1]
+    bibliographic_file_id [BIBLIOGR.TXT;1]
+}
+
+dir {
+    file CDI_TEST.APP
+    file HELLO
+    file COPYRGHT.TXT
+    file ABSTRACT.TXT
+    file BIBLIOGR.TXT
+}
+EOF
+$ cat <<EOF > Dockerfile
+FROM ghcr.io/cdifan/toolchaincdi
+RUN apt update && apt install --no-install-recommends -y make && apt clean
+EOF
+$ docker run --rm -ti -v $PWD:/work -w /work -u $(id -u):$(id -g) \
+    -v /path/to/your/OS9C:/os9c:ro -e CDEF=/os9c/DEFS -e CLIB=/os9c/LIB \
+    -e M68K_OS9_ELF=cache=/work/.cache $(docker build -q .) make
+```
+
 You'll get the disc image `build.bin` and its `build.cue`.
 
 - **`HELLO`** needs nothing but the image: `m68k-os9-gcc` brings the startup code, the C library
