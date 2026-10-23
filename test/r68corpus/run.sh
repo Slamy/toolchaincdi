@@ -22,8 +22,8 @@ DEFS=${DEFS:-$WORK/defs}
 R68=${R68:-}
 RC=${RC:-}
 JOBS=${JOBS:-3}
-# libraries converted into a cache, not beside them (the tools' default, save=beside, writes
-# into the user's kit)
+# libraries converted into a cache of the run's own, in the work directory (the tools' default
+# cache is shared, in the user's cache directory)
 export M68K_OS9_ELF=${M68K_OS9_ELF:-save=cache,cache=$WORK/cache}
 
 name_of() {	# N PATH
