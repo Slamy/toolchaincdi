@@ -493,6 +493,21 @@ function makes, say) works only with Microware's compilers, which happen to leav
 alone. The workaround is a file-scope register variable in the source files that use such a
 routine, for example in the routine's header:
 
+```c
+#ifdef __GNUC__
+register void *os9_a1_reserved __asm__("a1");  /* a1 carries a value between calls */
+#endif
+```
+
+GCC then never uses a1 in those files, not for variables, temporaries or spills (as `-ffixed-a1`
+would do), so the value stays in it until the next call, in whatever order the arguments are
+evaluated; functions called in between preserve it (Microware's do, and `-mos9call` functions
+save a1 if they use it). The cost is one address register less in those files. Not covered: a GCC
+runtime routine called in between (for example `memcpy` for a struct passed by value) may still
+change the register, and a built-in system call (`-mbuiltin=os9call`) that needs a1 for a
+parameter may conflict with the reservation. Otherwise, wrap the calls in one assembler routine.
+Tested at all of `m68k-os9-xcc`'s optimization levels.
+
 ### Options and special cases
 
 | Case | Behaviour under `-mos9call` | Why |
@@ -588,6 +603,8 @@ independent, and code using newlib's I/O may want either. Code that passes text 
 library, or writes OS-9 text files, needs it; code that must build either way can write `'\r'`,
 which is 13 in both compilers.
 
+`-mos9newline=` names the treatment of `\n`, `\r` and `\l`:
+
 | Kind | `\n` | `\r` | `\l` | `__OS9NEWLINE__` | Used by |
 |---|---|---|---|---|---|
 | `standard` (as `-mno-os9newline`) | 10 | 13 | unknown escape | undefined | GCC's default |
@@ -602,6 +619,10 @@ strings have no escapes, so a line break in one stays a line feed.
 
 ### Other options for Microware C code
 
+- **`-mos9regfunc`** accepts the storage class `register` on a block-scope function declaration,
+  such as `register char *p, *index();`, which Microware C 3.2 accepts and ignores; GCC warns and
+  treats it as an ordinary declaration of an external function. A function definition, a
+  file-scope declaration and `_Thread_local` are still errors. `m68k-os9-xcc` passes it.
 - **`-mbuiltin=stackcall|os9call`** chooses the convention of the runtime functions libgcc also
   calls ("Libraries" below).
 - **`-mspanreg=d2`…`d7`, `a2`…`a4`** keeps a register free for Microware's long branches to
@@ -817,6 +838,7 @@ Where the convention lives in the GCC 11 tree (`gcc/config/m68k/`, unless noted)
 
 | Where | GCC's purpose | What it does under the OS-9 convention |
 |---|---|---|
+| `m68k.opt` | option definitions | `-mos9call[=c32\|ucc]`, `-mbuiltin=`, `-mos9stkchk`, `-mos9newline[=]`, `-mos9regfunc`, `-mos9math`, `-mspanreg=`, all documented in `gcc/doc/invoke.texi` |
 | `m68k.h`:<br>`TARGET_CPU_CPP_BUILTINS` | predefined macros | `__OS9CALL__`, `__OS9CALL_UCC__`, `__OS9NEWLINE__`, `__OS9MATH__`, `__A6REL__`, Microware's names |
 | `m68k.h`:<br>`CUMULATIVE_ARGS`<br>`INIT_CUMULATIVE_ARGS` | per-call argument-scanning state | whether the call uses the OS-9 convention (one predicate, given the function type and its attribute; libcalls, `METHOD_TYPE` and `interrupt_handler` functions keep the stack convention), the argument position, and where arg 1 went |
 | `m68k.h`:<br>`FUNCTION_ARG_REGNO_P` | which registers can carry arguments | d0 and d1, under `-mos9call` or once an `os9call` attribute has been applied in the translation unit, so code using neither is unchanged (Level 0) |
@@ -833,6 +855,7 @@ Where the convention lives in the GCC 11 tree (`gcc/config/m68k/`, unless noted)
 | `m68k_expand_prologue` | the prologue | the `_stkcheck` sequence (`-mos9stkchk`) |
 | `m68k_option_override` | option checks | the rules of "Options and special cases" |
 | `libcpp/charset.c` | escapes | `-mos9newline` |
+| `c-family`<br>`c/c-decl.c` | declarations | `-mos9regfunc` |
 
 Background in the GCC internals manual: "Passing Arguments in Registers", "How Scalar Function
 Values Are Returned", "How Large Values Are Returned", "Function Entry and Exit".
@@ -1208,6 +1231,16 @@ The m68k-os9-tools repository also has drop-ins for Microware's compiler drivers
 linker and librarian, so existing makefiles build with GCC and the GNU tools; each has its own
 document there:
 
+- **`m68k-os9-xcc`**, a drop-in for Microware C 3.2's `xcc`/`cc`, and **`m68k-os9-ucc`** for
+  Ultra C's `xcc`: their options mapped onto GCC's (`-mos9call`, `-mbuiltin=os9call`,
+  `-mos9newline`, `-mos9regfunc`, `-mos9stkchk` unless `-s`; Ultra C mode `-mos9call=ucc`, and
+  `-mos9newline=swapped` with `-a`), and the user's own copy of Microware's headers and libraries,
+  converted on the fly. C 3.2's optimization levels map onto GCC's: the default and `-o=1`
+  (`c68` and `o68`'s peephole pass) onto `-Os`, `-o=2` (also `c68 -c`) onto `-O2`, and `-o=0` or
+  `-o` alone (no optimizer) onto `-O0`; `-Os` gives smaller code than C 3.2's own optimizer. C
+  3.2's `@` lines and `#asm` blocks go into the assembler output where they stand, through
+  `gastor68` and `m68k-os9-r68`, as C 3.2 passes them (`#include` expanded inside `#asm`, macros
+  not); Ultra C rejects both. C 3.2's `direct`, which changes nothing in its code, is removed.
 - **`m68k-os9-r68`**, a drop-in for Microware's `r68`: `r68togas` translates r68 syntax to GNU
   `as` syntax, in the dialect of C 3.2's or Ultra C's assembler (`-dialect=`), and objects come
   out as ELF or, with `-obj=rof`, as ROF.
@@ -1511,6 +1544,53 @@ needed.
   `f(0x11111111, 0x22222222, 0x33333333)`, so each pattern pins one fact: `#0x11111111` → `%d0`,
   `#0x22222222` → `%d1`, `#0x33333333` pushed. Callees return or store a specific parameter, so
   the pattern shows where the callee reads it from.
+- **Coverage:** one test per rule in §3 and §4:
+  - argument positions, including `int, double, int`, `struct, int` and double first
+  - narrow, pointer and float arguments
+  - indirect calls
+  - variadic calls placed like unprototyped calls: `g(int, ...)`, `h(int, int, ...)` and, in C++,
+    `f(...)`, with promotions of unnamed `float`/`char`/`short` arguments; `-mos9call=ucc`
+  - return values
+  - which registers the prologue saves (d1 unless it's an argument or return register; a0/a1;
+    never d0); a0/a1 kept across calls to prototyped os9call functions only
+  - struct return in the a0 convention (buffer address in a0, all aggregates)
+  - no sibling call from os9call functions
+  - the scope rules of §4: member functions (`METHOD_TYPE`) and libcalls unchanged, in C and C++
+  - static member functions and capture-less lambda conversions use the OS-9 convention (C++)
+  - `interrupt_handler` functions excluded; the `stackcall` and `os9call` attributes, including
+    through function pointers and typedefs
+  - `os9call`-attributed declarations (e.g. via `_OS9PROTO`) are called with the OS-9 convention
+    when `-mos9call` is off, and `__OS9CALL__` is defined only with the flag
+  - assigning between function pointers of different effective conventions is diagnosed as
+    incompatible; an unattributed pointer under `-mos9call` and an `os9call` pointer are compatible
+  - `long long` in d0:d1; `long double` and `_Complex` on the stack and returned via a0
+  - small structs and unions with integer modes still passed on the stack
+  - odd-sized structs (1, 2, 3, 5, 6, 7 bytes) in 4-byte-rounded slots, data at the start of the
+    slot
+  - data layout unchanged by `-mos9call` (member offsets, sizes, `enum` size, bitfield order as in
+    probe tests 70–79)
+  - float returned in d0; with `-m68881`, return values still in d0 / d0:d1 and FPU registers saved
+  - the option rules: `-mshort`, `-mrtd`, `-pg`, `-finstrument-functions`, `-fprofile-arcs`,
+    `-fprofile-generate`, `-fuse-cxa-atexit` and (with `-m68020`) `-fstack-limit-symbol` and
+    `-fstack-limit-register=d0`/`d1` rejected; warnings for `-m68881`, missing `-ma6rel`,
+    `-malign-int`, `-fshort-enums` and `-fpack-struct`
+  - functions with frames of 32 KB or more keep a1 intact
+  - C++ mangling: the redundant attribute is dropped, so `U9stackcall` appears only under
+    `-mos9call` and `U7os9call` only without it; unattributed types mangle as with the regular
+    compiler
+  - runtime functions called through built-in declarations use the stack convention under
+    `-mos9call`: the `memcpy` call from a large struct copy; explicit calls to `strlen`, `malloc`
+    and `free`; `_Unwind_Resume`, in C with `-fexceptions` and a `cleanup` variable; with
+    `-mbuiltin=os9call`, the OS-9 convention
+  - user redeclarations without a convention attribute (K&R `char *malloc();`, a private
+    `memcpy` prototype) still call with the stack convention
+  - nested functions: direct calls accepted, an error when a trampoline would be needed
+  - `__builtin_apply` and friends rejected
+  - `main`, `qsort` comparators and signal handlers compiled with the OS-9 convention
+  - `-mos9stkchk`: `N`, placement and the `d0` save; the `remote` attribute: sections and code;
+    `-mos9math`'s inline traps; `-mspanreg=`
+  - `-mos9newline` and its kinds: the values in C and in `#if`, and the bytes of string literals in
+    the assembler; unchanged without it, also under `-mos9call`; `-mos9regfunc`
 
 ### Level 2: execution-level ABI checks
 
