@@ -1,5 +1,11 @@
 # Comparing r68 sources with Microware's assemblers
 
+Scripts that take any set of r68 sources (whatever is on a disk), assemble them with
+`m68k-os9-r68` and with Microware's own assemblers, Ultra C's `r68` (Windows, through WSL interop)
+and C 3.2's `r68` (DOS, in vDos), and compare the objects. See "Microware compatibility" in
+`src/m68k-os9-tools/r68togas.md`. Machine specific: every path is a setting in the environment or
+an argument.
+
 Nothing is written beside the sources: objects, listings and logs go to the work directory and,
 for C 3.2's `r68`, to `OUT`. **Microware's assemblers run only in a mirror** of the sources
 (`mirror.py`), never in the originals' directories: C 3.2's `r68` has no `-u` (`use` is relative

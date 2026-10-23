@@ -67,7 +67,7 @@ RUN CFLAGS_FOR_TARGET="-Os -g -mpcrel -ma6rel -ffunction-sections -fdata-section
 WORKDIR /work/src/psximager
 RUN ./bootstrap && ./configure --prefix=/usr --with-boost-libdir=/usr/lib/x86_64-linux-gnu/ && make && make DESTDIR=/work/root install
 
-WORKDIR /work/src/elf2mod
+WORKDIR /work/src/m68k-os9-tools
 RUN make && make DESTDIR=/work/root/usr install
 
 FROM ubuntu:20.04

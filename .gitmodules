@@ -14,9 +14,9 @@
 	path = src/psximager
 	url = https://github.com/murachue/psximager.git
 	branch = cdi
-[submodule "elf2mod"]
-	path = src/elf2mod
-	url = https://github.com/cdifan/elf2mod.git
+[submodule "m68k-os9-tools"]
+	path = src/m68k-os9-tools
+	url = https://github.com/cdifan/m68k-os9-tools.git
 	branch = main-compat
 [submodule "test/abi-exec/musashi"]
 	path = test/abi-exec/musashi

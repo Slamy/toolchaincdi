@@ -1,7 +1,7 @@
 #!/bin/sh
 # r68xld.sh LD ARGS... -o OUT ...: LD (GNU ld) with ARGS, and where the link fails only for
 # undefined r68x_ symbols (link-time expressions of sys.l's equates, which rof2elf notes in the
-# objects' .r68x section, src/elf2mod/r68x_note.h), linked again with their definitions, as
+# objects' .r68x section, src/m68k-os9-tools/r68x_note.h), linked again with their definitions, as
 # os9link.c does for the front ends: a link written anyway gives the notes of the objects and
 # members linked; each referred-to NAME=TEXT becomes NAME = TEXT (the names quoted) in a linker
 # script, with -u for each term so that sys.l's members are taken in.

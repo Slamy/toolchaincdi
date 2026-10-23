@@ -1450,6 +1450,9 @@ Development happens in forks under [github.com/cdifan][cdifan]:
 - **`cdifan/newlib-cygwin`** (forked from `murachue/newlib-cygwin`): branch
   `newlib-4.1.0-os9-compat`, with the os9call `setjmp`/`longjmp`, `libos9math` and the OS-9
   runtime (§4, "Libraries").
+- **`cdifan/m68k-os9-tools`** (forked from `murachue/elf2mod`; submodule `src/m68k-os9-tools`):
+  branch `main-compat`, its default, with `elf2mod`, `rof2elf`, `elf2rof` (§6) and the drop-ins
+  for Microware's tools; `main` is Murachue's.
 
 The upstream branch of each fork is kept as it is; the work branch has a `-compat` suffix.
 

@@ -26,6 +26,10 @@ own branch, next to Murachue's unchanged one where Murachue's repository has one
 | `src/gcc` | [cdifan/gcc](https://github.com/cdifan/gcc) | `11.1.0-os9-compat` (`11.1.0-os9` is Murachue's) |
 | `src/binutils-gdb` | [cdifan/binutils-gdb](https://github.com/cdifan/binutils-gdb) | `m68k-gas-fixes` |
 | `src/newlib-cygwin` | [cdifan/newlib-cygwin](https://github.com/cdifan/newlib-cygwin) | `newlib-4.1.0-os9-compat` |
+| `src/m68k-os9-tools` | [cdifan/m68k-os9-tools](https://github.com/cdifan/m68k-os9-tools) | `main-compat` (a fork of Murachue's elf2mod) |
+
+psximager points at Murachue's repository. Murachue's own toolchain is
+[murachue/toolchaincdi](https://github.com/murachue/toolchaincdi).
 
 # Ingredients
 

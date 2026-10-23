@@ -90,7 +90,7 @@ check:
 	    CFLAGS_T="-O2 -m68020 -m68881 -mpcrel -ma6rel -mos9call -w" run
 
 # Level 3 (partial): tests linked with Microware's C library (cstart.r,
-# clib.l), converted with rof2elf from src/elf2mod.  Microware's files
+# clib.l), converted with rof2elf from src/m68k-os9-tools.  Microware's files
 # are proprietary and not included: point MWLIB at a directory holding
 # cstart.r, clib.l and sys.l (lower or upper case).
 #   make check-mw MWLIB=/path/to/LIB
@@ -99,9 +99,9 @@ CFLAGS_MW = -O2 -mpcrel -ma6rel -mos9call -mbuiltin=os9call -w
 MWTESTS   = $(basename $(notdir $(wildcard $(HERE)mwtests/*.c)))
 mwfile    = $(firstword $(wildcard $(MWLIB)/$(1) $(MWLIB)/$(shell echo $(1) | tr a-z A-Z)))
 
-$(BUILD)/rof2elf: $(HERE)../../src/elf2mod/rof2elf.c $(HERE)../../src/elf2mod/r68x_note.c $(HERE)../../src/elf2mod/r68x_note.h
+$(BUILD)/rof2elf: $(HERE)../../src/m68k-os9-tools/rof2elf.c $(HERE)../../src/m68k-os9-tools/r68x_note.c $(HERE)../../src/m68k-os9-tools/r68x_note.h
 	mkdir -p $(BUILD)
-	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/elf2mod/r68x_note.c
+	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/m68k-os9-tools/r68x_note.c
 
 # sys.l too, as an archive: rof2elf leaves its equates (F$Exit, E$BMode)
 # external where a relocation takes them, as r68 does, so a link needs
@@ -166,7 +166,7 @@ check-ucc: $(BUILD)/abirun $(UCCTESTS:%=$(BUILD)/ucc/%.elf)
 	  else echo "FAIL: ucc/$$t"; fail=1; fi; done; exit $$fail
 
 # Modules: the tests linked with -q, converted by elf2mod (from
-# src/elf2mod, with the BFD library under BFDPATH) and run as OS-9 modules
+# src/m68k-os9-tools, with the BFD library under BFDPATH) and run as OS-9 modules
 # (abirun -m, which checks the header parity and CRC like OS-9; the .stb
 # symbol modules from elf2mod -g are checked with abirun -v); plus
 # modtests/, whose far calls go through elf2mod's _jmptbl (linked with
@@ -177,11 +177,11 @@ BFDPATH  ?= $(HOME)/build/install/x86_64-pc-linux-gnu/m68k-elfos9
 JMPTBL    = 60
 MODTESTS  = $(basename $(notdir $(wildcard $(HERE)modtests/*.c)))
 
-$(BUILD)/elf2mod: $(HERE)../../src/elf2mod/elf2mod.c $(HERE)../../src/elf2mod/r68x_note.c $(HERE)../../src/elf2mod/r68x_note.h
+$(BUILD)/elf2mod: $(HERE)../../src/m68k-os9-tools/elf2mod.c $(HERE)../../src/m68k-os9-tools/r68x_note.c $(HERE)../../src/m68k-os9-tools/r68x_note.h
 	mkdir -p $(BUILD)
 	tr -d '\r' < $< > $(BUILD)/elf2mod.c
-	$(HOSTCC) -O2 -w -I$(BFDPATH)/include -I$(HERE)../../src/elf2mod -o $@ $(BUILD)/elf2mod.c \
-	  $(HERE)../../src/elf2mod/r68x_note.c $(BFDPATH)/lib/libbfd.a -liberty -lz -ldl
+	$(HOSTCC) -O2 -w -I$(BFDPATH)/include -I$(HERE)../../src/m68k-os9-tools -o $@ $(BUILD)/elf2mod.c \
+	  $(HERE)../../src/m68k-os9-tools/r68x_note.c $(BFDPATH)/lib/libbfd.a -liberty -lz -ldl
 
 $(BUILD)/%.mod: $(BUILD)/%.elf $(BUILD)/elf2mod
 	$(TPREFIX)ld -q --no-check-sections -T $(HERE)abi.lds -o $(BUILD)/$*.qelf \
@@ -251,7 +251,7 @@ check-newlib:
 	  $(MAKE) --no-print-directory BUILD=$(BUILD)/nl-os9call CONV=-mos9call run-newlib
 
 # Microware's linker: the same objects converted by elf2rof (from
-# src/elf2mod), linked with l68 and run as OS-9 modules; modtests/ with
+# src/m68k-os9-tools), linked with l68 and run as OS-9 modules; modtests/ with
 # l68 -a, which builds l68's own jump table.  l68 -a only redirects bsr.w
 # and lea (unlike elf2mod, it doesn't redirect bra.w, which -mbsrw uses
 # for tail calls), so modtests/ are compiled without tail calls here.  The
@@ -261,9 +261,9 @@ check-newlib:
 #   make check-l68 L68=/mnt/c/path/to/DOS/BIN/l68.exe [MWLIB=/path/to/LIB]
 L68 ?=
 
-$(BUILD)/elf2rof: $(HERE)../../src/elf2mod/elf2rof.c $(HERE)../../src/elf2mod/r68x_note.c $(HERE)../../src/elf2mod/r68x_note.h
+$(BUILD)/elf2rof: $(HERE)../../src/m68k-os9-tools/elf2rof.c $(HERE)../../src/m68k-os9-tools/r68x_note.c $(HERE)../../src/m68k-os9-tools/r68x_note.h
 	mkdir -p $(BUILD)
-	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/elf2mod/r68x_note.c
+	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/m68k-os9-tools/r68x_note.c
 
 $(BUILD)/libgcc.l: $(BUILD)/elf2rof $$(LIBGCC)
 	$(BUILD)/elf2rof -o $@ $(LIBGCC)
@@ -336,19 +336,19 @@ check-lsym: $(BUILD)/lsymcheck $(LSYMVARIANTS:%=$(BUILD)/lsym/%.mod)
 
 # r68togas: tests whose assembly side is written in Microware's r68
 # syntax (r68tests/NAME.a, the same code as tests/NAME.S), translated by
-# m68k-os9-r68 built from src/elf2mod (r68togas, GNU as, the object's
+# m68k-os9-r68 built from src/m68k-os9-tools (r68togas, GNU as, the object's
 # names); linked and run as the tests are.  Needs no Microware files.
 #   make check-r68
 R68TESTS = $(basename $(notdir $(wildcard $(HERE)r68tests/*.a)))
 
-$(BUILD)/r68togas: $(HERE)../../src/elf2mod/r68togas.c $(HERE)../../src/elf2mod/r68x_note.c $(HERE)../../src/elf2mod/r68x_note.h
+$(BUILD)/r68togas: $(HERE)../../src/m68k-os9-tools/r68togas.c $(HERE)../../src/m68k-os9-tools/r68x_note.c $(HERE)../../src/m68k-os9-tools/r68x_note.h
 	mkdir -p $(BUILD)
-	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/elf2mod/r68x_note.c
+	$(HOSTCC) -O2 -o $@ $< $(HERE)../../src/m68k-os9-tools/r68x_note.c
 
 # m68k-os9-r68, the front end that runs r68togas and gas and gives the
 # object's symbols their names back (one named like a register is NAME__r68
 # for gas), as it assembles r68 sources
-OS9SRC  := $(HERE)../../src/elf2mod
+OS9SRC  := $(HERE)../../src/m68k-os9-tools
 FE_SRCS := $(addprefix $(OS9SRC)/,os9conv.c os9link.c hostsys.c r68x_note.c asmsyntax.c)
 $(BUILD)/m68k-os9-r68: $(OS9SRC)/m68k-os9-r68.c $(FE_SRCS) $(wildcard $(OS9SRC)/*.h) $(BUILD)/r68togas
 	mkdir -p $(BUILD)
@@ -373,7 +373,7 @@ check-r68: $(BUILD)/abirun $(R68TESTS:%=$(BUILD)/r68/%.elf)
 # r68 syntax by gastor68, assembled by m68k-os9-r68 (r68togas, GNU as), and run
 # as the tests are; at -O0 and -O2.
 #   make check-gastor68
-$(BUILD)/gastor68: $(HERE)../../src/elf2mod/gastor68.c
+$(BUILD)/gastor68: $(HERE)../../src/m68k-os9-tools/gastor68.c
 	mkdir -p $(BUILD)
 	$(HOSTCC) -O2 -o $@ $<
 
