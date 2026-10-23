@@ -1354,6 +1354,13 @@ afterwards, extensions of the protocol made for `cdirun`.
 
 What the tests use:
 - `cdirun COMMAND...` sends a command line and writes its output until the shell prompts again.
+- `cdirun -dc FILE...` and `-uc FILE...` copy files to and from the current OS-9 directory with
+  the Kermit program on the disk (OS-9 Kermit 1.6), in image mode, or with `-te` as text, with
+  CR line ends on OS-9.
+- `cdirun -st` exits with the OS-9 exit status of the command line and writes it as a last line,
+  `Status GGG:NNN`. The shell reports a status only as `Error #GGG:NNN`, and not 0 or 1 at all;
+  `cdirun` runs the command line through a small helper module of its own (`runst`, built in),
+  which reports every status.
 - On OS-9, programs are run from memory: `attr NAME -e -pe; load -d NAME; NAME` (the shell
   looks for programs only in memory and the execution directory). Microware's `cstart.r` ignores
   what `main` returns, so a test reports through `exit()`.
