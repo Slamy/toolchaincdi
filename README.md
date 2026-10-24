@@ -179,6 +179,30 @@ The image is built by GitHub Actions on every push to `main` and published as
 `ghcr.io/cdifan/toolchaincdi`. The original `ghcr.io/murachue/toolchaincdi` image predates this
 fork's changes.
 
+# Windows
+
+The toolchain also runs on Windows, without Docker. GitHub Actions builds it with
+[`build-win64.sh`](build-win64.sh) (on Linux, with mingw-w64, for `x86_64-w64-mingw32`):
+
+- on every push to `main`, as the artifact `toolchaincdi-<commit>-win64` of the "Build the
+  Windows toolchain" run in the Actions tab (downloading it needs a GitHub login; artifacts
+  expire after 90 days);
+- for every release tag `v*`, as `toolchaincdi-<tag>-win64.zip` on the Releases page.
+
+Unpack it anywhere and put its `bin` folder on `PATH`. `bin` has the tools under their long names
+(`m68k-elfos9-gcc`, `m68k-os9-gcc`, `m68k-os9-xcc`, ...) and, for old makefiles, under the short
+names of Microware's tools: `xcc` and `cc` (`m68k-os9-xcc`), `ucc` (`m68k-os9-xcc` in Ultra C
+mode), `l68`, `r68` and `libgen`. `CDEF` and `CLIB` work as above, with Windows paths; in cmd:
+
+```
+set PATH=C:\toolchaincdi-v0.9.0-win64\bin;%PATH%
+set CDEF=C:\OS9C\DEFS
+set CLIB=C:\OS9C\LIB
+xcc hello.c -f=hello
+```
+
+The Windows build has no psximager and no make.
+
 # License
 
 MIT for Dockerfile.
