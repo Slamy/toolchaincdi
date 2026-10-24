@@ -1,0 +1,65 @@
+name: Build the Windows toolchain
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# build-win64.sh builds it on Linux (a Canadian cross with mingw-w64). Every run uploads the folder
+# toolchaincdi-<commit>-win64 as an artifact (GitHub zips it for download); a pushed tag v* also
+# attaches toolchaincdi-<tag>-win64.zip to the release of that tag.
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      name: ${{ steps.name.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+      # psximager and Musashi are not part of the Windows toolchain
+      - name: Check out the submodules
+        run: git submodule update --init --depth 1 src/binutils-gdb src/gcc src/newlib-cygwin src/m68k-os9-tools
+      - name: Install the packages
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+            build-essential mingw-w64 m4 bison flex texinfo zlib1g-dev wget xz-utils ca-certificates file
+      - name: Name the build
+        id: name
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=${GITHUB_SHA::7}; fi
+          echo "name=toolchaincdi-$v-win64" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: ./build-win64.sh ${{ steps.name.outputs.name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.name }}
+          path: ${{ steps.name.outputs.name }}/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    # attaching a file to a release needs contents: write
+    permissions:
+      contents: write
+    env:
+      NAME: ${{ needs.build.outputs.name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.name }}
+          path: ${{ needs.build.outputs.name }}
+      - name: Zip it
+        run: zip -r -9 -X "$NAME.zip" "$NAME"
+      - name: Attach it to the release
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes ""
+          gh release upload "$GITHUB_REF_NAME" "$NAME.zip" --repo "$GITHUB_REPOSITORY" --clobber
