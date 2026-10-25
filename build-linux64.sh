@@ -172,10 +172,11 @@ mapfile -t progs < <(find "$P" -type f -exec file {} + | grep 'ELF 64-bit.*x86-6
 strip --strip-unneeded "${progs[@]}"
 
 step "README.linux"
-# the highest GLIBC_ symbol version and the shared libraries the programs need (a static
-# program has neither)
-glibc=$(for f in "${progs[@]}"; do objdump -T "$f" 2> /dev/null || true; done |
-	grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -u -V | tail -1)
+# the highest GLIBC_ and GLIBCXX_ (libstdc++) symbol versions and the shared libraries the
+# programs need (a static program has none)
+versions=$(for f in "${progs[@]}"; do objdump -T "$f" 2> /dev/null || true; done)
+glibc=$(echo "$versions" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -u -V | tail -1)
+glibcxx=$(echo "$versions" | grep -o 'GLIBCXX_[0-9.]*' | sed 's/GLIBCXX_//' | sort -u -V | tail -1)
 needed=$(for f in "${progs[@]}"; do objdump -p "$f" | awk '$1 == "NEEDED" {print $2}'; done |
 	sort -u)
 cat > "$P/README.linux" << EOF
@@ -191,8 +192,8 @@ Use: unpack anywhere and put the bin folder on PATH:
 
 See README.md at https://github.com/cdifan/toolchaincdi for the tools and their options.
 
-Needs: x86_64 Linux with glibc $glibc or newer, and these shared libraries (all part of a
-standard installation):
+Needs: x86_64 Linux with glibc $glibc or newer, and these shared libraries (normally
+installed)${glibcxx:+, libstdc++.so.6 with GLIBCXX_$glibcxx or newer}:
 
 $(echo "$needed" | sed 's/^/    /')
 
