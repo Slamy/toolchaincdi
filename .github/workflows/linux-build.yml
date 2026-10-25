@@ -7,12 +7,19 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'A release tag (v*) to attach the set to, built from the chosen branch'
+        required: false
+        default: ''
 
 # build-linux64.sh builds it in an Ubuntu 22.04 container: the programs need the glibc of the
 # system they were built on or newer, so an older build system makes them run on more systems.
 # Every run uploads toolchaincdi-<commit>-linux64.tar.gz as an artifact (a tar keeps the
 # programs' execute permissions, which the artifact's zip drops); a pushed tag v* also attaches
-# toolchaincdi-<tag>-linux64.tar.gz to the release of that tag.
+# toolchaincdi-<tag>-linux64.tar.gz to the release of that tag. A manual run with a release tag
+# does that for an existing release from the chosen branch (for a release older than this
+# workflow, from a commit with the same sources).
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -24,6 +31,7 @@ jobs:
         shell: bash
     outputs:
       name: ${{ steps.name.outputs.name }}
+      release: ${{ steps.name.outputs.release }}
     steps:
       # git before the checkout, which otherwise downloads the files without git
       - name: Install the packages
@@ -40,9 +48,16 @@ jobs:
           git submodule update --init --depth 1 src/binutils-gdb src/gcc src/newlib-cygwin src/m68k-os9-tools
       - name: Name the build
         id: name
+        env:
+          RELEASE: ${{ inputs.release }}
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=${GITHUB_SHA::7}; fi
+          if [ -n "$RELEASE" ]; then v=$RELEASE
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME
+          else v=${GITHUB_SHA::7}; fi
           echo "name=toolchaincdi-$v-linux64" >> "$GITHUB_OUTPUT"
+          if [ -n "$RELEASE" ] || [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "release=$v" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build
         run: ./build-linux64.sh ${{ steps.name.outputs.name }}
       - name: Compile a program with it
@@ -62,13 +77,14 @@ jobs:
 
   release:
     needs: build
-    if: github.ref_type == 'tag'
+    if: needs.build.outputs.release != ''
     runs-on: ubuntu-24.04
     # attaching a file to a release needs contents: write
     permissions:
       contents: write
     env:
       NAME: ${{ needs.build.outputs.name }}
+      RELEASE: ${{ needs.build.outputs.release }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@v4
@@ -76,6 +92,9 @@ jobs:
           name: ${{ needs.build.outputs.name }}
       - name: Attach it to the release
         run: |
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes ""
-          gh release upload "$GITHUB_REF_NAME" "$NAME.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
+          # a pushed tag gets a release; a manual run's must exist
+          gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || {
+            [ "$GITHUB_REF_TYPE" = tag ] &&
+              gh release create "$RELEASE" --repo "$GITHUB_REPOSITORY" --title "$RELEASE" --notes ""
+          }
+          gh release upload "$RELEASE" "$NAME.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
