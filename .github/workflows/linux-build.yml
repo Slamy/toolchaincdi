@@ -1,0 +1,81 @@
+name: Build the Linux toolchain
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# build-linux64.sh builds it in an Ubuntu 22.04 container: the programs need the glibc of the
+# system they were built on or newer, so an older build system makes them run on more systems.
+# Every run uploads toolchaincdi-<commit>-linux64.tar.gz as an artifact (a tar keeps the
+# programs' execute permissions, which the artifact's zip drops); a pushed tag v* also attaches
+# toolchaincdi-<tag>-linux64.tar.gz to the release of that tag.
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      name: ${{ steps.name.outputs.name }}
+    steps:
+      # git before the checkout, which otherwise downloads the files without git
+      - name: Install the packages
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+            build-essential m4 bison flex texinfo zlib1g-dev wget xz-utils ca-certificates file git
+      - uses: actions/checkout@v4
+      # the container runs as root, the checkout belongs to the runner's user; psximager and
+      # Musashi are not part of the toolchain
+      - name: Check out the submodules
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule update --init --depth 1 src/binutils-gdb src/gcc src/newlib-cygwin src/m68k-os9-tools
+      - name: Name the build
+        id: name
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=${GITHUB_SHA::7}; fi
+          echo "name=toolchaincdi-$v-linux64" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: ./build-linux64.sh ${{ steps.name.outputs.name }}
+      - name: Compile a program with it
+        env:
+          NAME: ${{ steps.name.outputs.name }}
+        run: |
+          printf '#include <stdio.h>\nint main(void)\n{\n\tprintf("hello\\n");\n\treturn 0;\n}\n' > hello.c
+          "$NAME/bin/m68k-os9-gcc" -o hello hello.c
+          ls -l hello
+      - name: Pack it
+        run: tar czf ${{ steps.name.outputs.name }}.tar.gz ${{ steps.name.outputs.name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.name }}
+          path: ${{ steps.name.outputs.name }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    # attaching a file to a release needs contents: write
+    permissions:
+      contents: write
+    env:
+      NAME: ${{ needs.build.outputs.name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.name }}
+      - name: Attach it to the release
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes ""
+          gh release upload "$GITHUB_REF_NAME" "$NAME.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber

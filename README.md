@@ -206,43 +206,39 @@ The Windows build has no psximager and no make.
 
 # Linux
 
-The toolchain can also be built and used directly on Linux, without Docker.
+The toolchain also runs on Linux, without Docker (x86_64, glibc 2.35 or newer: Ubuntu 22.04,
+Debian 12 and later). GitHub Actions builds it with [`build-linux64.sh`](build-linux64.sh), in an
+Ubuntu 22.04 container:
 
-## Prerequisites
+- on every push to `main`, as the artifact `toolchaincdi-<commit>-linux64` of the "Build the Linux
+  toolchain" run in the Actions tab, holding `toolchaincdi-<commit>-linux64.tar.gz` (downloading
+  it needs a GitHub login; artifacts expire after 90 days);
+- for every release tag `v*`, as `toolchaincdi-<tag>-linux64.tar.gz` on the Releases page.
 
-Install the packages needed for building (Ubuntu/Debian names):
+Unpack it anywhere and put its `bin` folder on `PATH`. `bin` has the tools under the same long
+and short names as the Windows build's; `CDEF` and `CLIB` work as above:
 
-```bash
-sudo apt install build-essential autoconf automake libtool gettext bison flex manpages-dev \
-  wget git texinfo zlib1g-dev libiberty-dev pkg-config libboost-dev \
-  libboost-filesystem-dev libboost-regex-dev libcdio-dev libiso9660-dev libvcdinfo-dev
+```
+tar xf toolchaincdi-v0.9.0-linux64.tar.gz
+export PATH=$PWD/toolchaincdi-v0.9.0-linux64/bin:$PATH
+m68k-os9-gcc -o hello hello.c
 ```
 
-On other distros the package names are similar — you need a C/C++ compiler, the GNU build
-tools, bison/flex, texinfo, and the boost + libcdio dev libraries.
+`README.linux` in the folder lists the glibc version and the shared libraries the programs need,
+as read from them when they were built. The Linux build has no psximager (the Docker image has);
+make comes from the system.
 
-## Build
+To build it yourself (a GCC build: an hour or more), with the packages the workflow installs
+(`.github/workflows/linux-build.yml`; Ubuntu and Debian names):
 
-```bash
-git submodule update --init --recursive
-./build-linux.sh toolchaincdi-linux
+```
+sudo apt install build-essential m4 bison flex texinfo zlib1g-dev wget xz-utils ca-certificates file
+git submodule update --init src/binutils-gdb src/gcc src/newlib-cygwin src/m68k-os9-tools
+./build-linux64.sh toolchaincdi-linux64
 ```
 
-This takes a while (GCC compilation). The output folder contains a self-contained toolchain
-that you can use directly:
-
-```bash
-export PATH=$(pwd)/toolchaincdi-linux/bin:$PATH
-m68k-os9-gcc -Os -o hello hello.c
-```
-
-The `bin` folder has the tools under their long names (`m68k-elfos9-gcc`, `m68k-os9-gcc`,
-`m68k-os9-xcc`, ...) and, for old makefiles, under the short names of Microware's tools:
-`xcc` and `cc` (`m68k-os9-xcc`), `ucc` (`m68k-os9-xcc` in Ultra C mode), `l68`, `r68` and
-`libgen`. `CDEF` and `CLIB` work as described in "How to use?" above.
-
-The Linux build includes **psximager** (for CD-i image creation) and **make** — both available
-via the system packages, unlike the Windows build.
+The build directory is `build-linux64`; a second run reuses what is built (see the script's
+comment). The programs then need the build system's glibc or newer.
 
 # License
 

@@ -1,2 +1,3 @@
-/toolchaincdi-linux
-
+/build-linux64/
+/toolchaincdi-*-linux64/
+/toolchaincdi-*-linux64.tar.gz
