@@ -203,6 +203,47 @@ xcc hello.c -f=hello
 
 The Windows build has no psximager and no make.
 
+
+# Linux
+
+The toolchain can also be built and used directly on Linux, without Docker.
+
+## Prerequisites
+
+Install the packages needed for building (Ubuntu/Debian names):
+
+```bash
+sudo apt install build-essential autoconf automake libtool gettext bison flex manpages-dev \
+  wget git texinfo zlib1g-dev libiberty-dev pkg-config libboost-dev \
+  libboost-filesystem-dev libboost-regex-dev libcdio-dev libiso9660-dev libvcdinfo-dev
+```
+
+On other distros the package names are similar — you need a C/C++ compiler, the GNU build
+tools, bison/flex, texinfo, and the boost + libcdio dev libraries.
+
+## Build
+
+```bash
+git submodule update --init --recursive
+./build-linux.sh toolchaincdi-linux
+```
+
+This takes a while (GCC compilation). The output folder contains a self-contained toolchain
+that you can use directly:
+
+```bash
+export PATH=$(pwd)/toolchaincdi-linux/bin:$PATH
+m68k-os9-gcc -Os -o hello hello.c
+```
+
+The `bin` folder has the tools under their long names (`m68k-elfos9-gcc`, `m68k-os9-gcc`,
+`m68k-os9-xcc`, ...) and, for old makefiles, under the short names of Microware's tools:
+`xcc` and `cc` (`m68k-os9-xcc`), `ucc` (`m68k-os9-xcc` in Ultra C mode), `l68`, `r68` and
+`libgen`. `CDEF` and `CLIB` work as described in "How to use?" above.
+
+The Linux build includes **psximager** (for CD-i image creation) and **make** — both available
+via the system packages, unlike the Windows build.
+
 # License
 
 MIT for Dockerfile.
