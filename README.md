@@ -206,6 +206,8 @@ The Windows build has no psximager and no make.
 
 # Linux
 
+## Prebuilt
+
 The toolchain also runs on Linux, without Docker (x86_64, glibc 2.34 or newer: Ubuntu 22.04,
 Debian 12 and later). GitHub Actions builds it with [`build-linux64.sh`](build-linux64.sh), in an
 Ubuntu 22.04 container:
@@ -227,6 +229,8 @@ m68k-os9-gcc -o hello hello.c
 `README.linux` in the folder lists the glibc and libstdc++ versions and the shared libraries the
 programs need, as read from them when they were built. The Linux build has no psximager (the Docker image has);
 make comes from the system.
+
+## Building from source
 
 To build it yourself (a GCC build: an hour or more), with the packages the workflow installs
 (`.github/workflows/linux-build.yml`; Ubuntu and Debian names):
