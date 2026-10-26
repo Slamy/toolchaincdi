@@ -23,10 +23,12 @@
 # note: above licensing is only for this Dockerfile, not for built docker image.
 
 # ref: ArchLinux User Repository: m68k-elf-binutils, m68k-elf-gcc-bootstrap, m68k-elf-newlib
-FROM ubuntu:26.04 AS build
-RUN apt update && \
-  DEBIAN_FRONTEND="noninteractive" apt install --no-install-recommends -y build-essential autoconf automake libtool gettext bison flex manpages-dev \
-  wget git texinfo zlib1g-dev ca-certificates libiberty-dev pkg-config libboost-dev libboost-filesystem-dev libboost-regex-dev libcdio-dev libiso9660-dev libvcdinfo-dev
+FROM fedora:latest AS build
+RUN dnf -y --setopt=install_weak_deps=False install \
+  gcc gcc-c++ make autoconf automake libtool gettext bison flex man-pages wget git texinfo \
+  zlib-devel ca-certificates pkgconf-pkg-config boost-devel boost-filesystem boost-regex \
+  libcdio-devel vcdimager-devel && \
+  dnf clean all
 
 WORKDIR /work
 RUN wget \
@@ -41,7 +43,7 @@ RUN \
   mkdir -p /work/root
 
 WORKDIR /work/binutils-build
-RUN ../src/binutils-gdb/configure --target=m68k-elfos9 --prefix=/usr --disable-multilib --with-cpu=68000 \
+RUN CFLAGS="-std=gnu17" ../src/binutils-gdb/configure --target=m68k-elfos9 --prefix=/usr --disable-multilib --with-cpu=68000 \
   --disable-nls --disable-gdb --disable-gdbserver --disable-readline --enable-install-libbfd \
   --disable-libctf --disable-werror && \
   make -j$(grep -c ^processor /proc/cpuinfo) && \
@@ -62,7 +64,7 @@ RUN CFLAGS="-std=gnu17" CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" ../src/gcc/co
   cp -r /work/gcc-bootstrap-root/usr /
 
 WORKDIR /work/newlib-build
-RUN CFLAGS_FOR_TARGET="-Os -g -mpcrel -ma6rel -ffunction-sections -fdata-sections -fomit-frame-pointer -ffast-math" ../src/newlib-cygwin/configure \ 
+RUN CFLAGS_FOR_TARGET="-Os -g -mpcrel -ma6rel -ffunction-sections -fdata-sections -fomit-frame-pointer -ffast-math" ../src/newlib-cygwin/configure \
   --target=m68k-elfos9 --prefix=/usr --disable-newlib-supplied-syscalls --enable-multilib --with-cpu=68000 --disable-nls && \
   make -j$(grep -c ^processor /proc/cpuinfo) && \
   mkdir -p /work/newlib-root && \
@@ -71,12 +73,18 @@ RUN CFLAGS_FOR_TARGET="-Os -g -mpcrel -ma6rel -ffunction-sections -fdata-section
   cp -r /work/newlib-root/usr /work/root/
 
 WORKDIR /work/src/psximager
-RUN ./bootstrap && ./configure --prefix=/usr --with-boost-libdir=/usr/lib/x86_64-linux-gnu/ && make && make DESTDIR=/work/root install
+RUN ./bootstrap && ./configure --prefix=/usr --with-boost-libdir=/usr/lib64 && make && make DESTDIR=/work/root install
 
 WORKDIR /work/src/m68k-os9-tools
-RUN make && make DESTDIR=/work/root/usr install
+RUN H=$(../binutils-gdb/config.guess) && BFD=/work/binutils-root/usr/$H/m68k-elfos9 && \
+  make -j$(nproc) CC=gcc BFDPATH="$BFD" CFLAGS="-g -I$BFD/include -Wall -Wextra" \
+  LIBIBERTY_CFLAGS="-I/work/src/binutils-gdb/include" LDFLAGS="-L/work/binutils-build/libiberty" \
+  LIBS="$BFD/lib/libbfd.a /work/binutils-build/libiberty/libiberty.a /work/binutils-build/zlib/libz.a -ldl" && \
+  make DESTDIR=/work/root/usr LN=cp CC=gcc BFDPATH="$BFD" CFLAGS="-g -I$BFD/include -Wall -Wextra" \
+  LIBIBERTY_CFLAGS="-I/work/src/binutils-gdb/include" LDFLAGS="-L/work/binutils-build/libiberty" \
+  LIBS="$BFD/lib/libbfd.a /work/binutils-build/libiberty/libiberty.a /work/binutils-build/zlib/libz.a -ldl" install
 
-FROM ubuntu:26.04
-# Ubuntu 26.04's runtime ABI packages use the current Boost version and t64 CDIO name.
-RUN apt update && apt install --no-install-recommends -y libboost-filesystem1.90.0 libboost-regex1.90.0 libcdio19t64 libiso9660-12 libvcdinfo0 && apt clean
+FROM fedora:latest
+RUN dnf -y --setopt=install_weak_deps=False install boost-filesystem boost-regex libcdio vcdimager-libs && \
+  dnf clean all
 COPY --from=build /work/root/usr /usr/
