@@ -31,6 +31,7 @@ FORCE=${FORCE:-}
 mkdir -p "$WORK"
 cd "$WORK"
 step() { echo "=== $(date +%H:%M:%S) $*"; }
+step "using $J parallel build jobs"
 
 # needs_configure DIR CHECK_FILE...: whether DIR must be configured (again): FORCE names it, an
 # earlier step was configured again (its results and installed files may change), DIR or one of
@@ -68,8 +69,15 @@ if needs_configure deps "$D/lib/libgmp.a" "$D/lib/libmpfr.a" "$D/lib/libmpc.a"; 
 	rm -rf deps && mkdir deps
 	for b in $GMP $MPFR $MPC; do
 		rm -rf "$b" "build-$b" && tar xf $b.tar.* && mkdir "build-$b" && cd "build-$b"
-		"../$b/configure" --prefix="$D" --disable-shared --enable-static --with-gmp="$D" \
-		  --with-mpfr="$D" > configure.log
+		case "$b" in
+			"$GMP") DEP_ARGS=() ;;
+			"$MPFR") DEP_ARGS=(--with-gmp="$D") ;;
+			"$MPC") DEP_ARGS=(--with-gmp="$D" --with-mpfr="$D") ;;
+		esac
+		# GMP 6.2.1's compiler probe is incompatible with GCC 15's default C23 dialect.
+		# Its sources (and the two libraries which use it) build cleanly as GNU C17.
+		CFLAGS=-std=gnu17 "../$b/configure" --prefix="$D" --disable-shared --enable-static \
+		  "${DEP_ARGS[@]}" > configure.log
 		make -j"$J" > make.log
 		make install > install.log
 		cd ..
@@ -96,7 +104,7 @@ cd ..
 step "GCC (compiler and libgcc)"
 if needs_configure gcc-bootstrap "$P/bin/$T-gcc"; then
 	rm -rf gcc-bootstrap && mkdir gcc-bootstrap && cd gcc-bootstrap
-	CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" "$SRC/gcc/configure" --prefix="$P" --target=$T \
+	CFLAGS=-std=gnu17 CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" "$SRC/gcc/configure" --prefix="$P" --target=$T \
 	  --enable-languages=c --enable-multilib --with-cpu=68000 --with-system-zlib --with-libgloss \
 	  --without-headers --disable-shared --disable-nls "${WITH_DEPS[@]}" \
 	  > configure.log
@@ -129,7 +137,7 @@ cd ..
 step "GCC (with newlib)"
 if needs_configure gcc-final "$P/bin/$T-gcc" "$P/$T/lib/libc.a"; then
 	rm -rf gcc-final && mkdir gcc-final && cd gcc-final
-	CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" "$SRC/gcc/configure" --prefix="$P" --target=$T \
+	CFLAGS=-std=gnu17 CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" "$SRC/gcc/configure" --prefix="$P" --target=$T \
 	  --enable-languages=c --enable-multilib --with-cpu=68000 --with-system-zlib --with-libgloss \
 	  --without-headers --disable-shared --disable-nls "${WITH_DEPS[@]}" \
 	  > configure.log

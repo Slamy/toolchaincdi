@@ -22,8 +22,8 @@ on:
 # workflow, from a commit with the same sources).
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    container: ubuntu:22.04
+    runs-on: ubuntu-26.04
+    container: ubuntu:26.04
     permissions:
       contents: read
     defaults:

@@ -23,9 +23,10 @@
 # note: above licensing is only for this Dockerfile, not for built docker image.
 
 # ref: ArchLinux User Repository: m68k-elf-binutils, m68k-elf-gcc-bootstrap, m68k-elf-newlib
-FROM ubuntu:20.04 AS build
+FROM ubuntu:26.04 AS build
 RUN apt update && \
-  DEBIAN_FRONTEND="noninteractive" apt install --no-install-recommends -y build-essential autoconf automake libtool gettext bison flex manpages-dev wget git texinfo zlib1g-dev ca-certificates libiberty-dev pkg-config libboost1.71-dev libboost-filesystem1.71-dev libboost-regex1.71-dev libcdio-dev libiso9660-dev libvcdinfo-dev
+  DEBIAN_FRONTEND="noninteractive" apt install --no-install-recommends -y build-essential autoconf automake libtool gettext bison flex manpages-dev \
+  wget git texinfo zlib1g-dev ca-certificates libiberty-dev pkg-config libboost-dev libboost-filesystem-dev libboost-regex-dev libcdio-dev libiso9660-dev libvcdinfo-dev
 
 WORKDIR /work
 RUN wget \
@@ -40,7 +41,9 @@ RUN \
   mkdir -p /work/root
 
 WORKDIR /work/binutils-build
-RUN ../src/binutils-gdb/configure --target=m68k-elfos9 --prefix=/usr --disable-multilib --with-cpu=68000 --disable-nls --disable-gdb --enable-install-libbfd --disable-libctf && \
+RUN ../src/binutils-gdb/configure --target=m68k-elfos9 --prefix=/usr --disable-multilib --with-cpu=68000 \
+  --disable-nls --disable-gdb --disable-gdbserver --disable-readline --enable-install-libbfd \
+  --disable-libctf --disable-werror && \
   make -j$(grep -c ^processor /proc/cpuinfo) && \
   mkdir -p /work/binutils-root/usr && \
   make prefix=/work/binutils-root/usr install && \
@@ -48,7 +51,9 @@ RUN ../src/binutils-gdb/configure --target=m68k-elfos9 --prefix=/usr --disable-m
   cp -r /work/binutils-root/usr /
 
 WORKDIR /work/gcc-bootstrap-build
-RUN CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" ../src/gcc/configure --prefix=/usr --target=m68k-elfos9 --enable-languages="c" --enable-multilib --with-cpu=68000 --with-system-zlib --with-libgloss --without-headers --disable-shared --disable-nls && \
+# GMP 6.2.1's compiler probe is incompatible with GCC 15's default C23 dialect.
+RUN CFLAGS="-std=gnu17" CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" ../src/gcc/configure --prefix=/usr --target=m68k-elfos9 \
+  --enable-languages="c" --enable-multilib --with-cpu=68000 --with-system-zlib --with-libgloss --without-headers --disable-shared --disable-nls && \
   make all-gcc all-target-libgcc -j$(grep -c ^processor /proc/cpuinfo) && \
   mkdir -p /work/gcc-bootstrap-root && \
   make DESTDIR=/work/gcc-bootstrap-root install-gcc install-target-libgcc && \
@@ -57,7 +62,8 @@ RUN CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" ../src/gcc/configure --prefix=/us
   cp -r /work/gcc-bootstrap-root/usr /
 
 WORKDIR /work/newlib-build
-RUN CFLAGS_FOR_TARGET="-Os -g -mpcrel -ma6rel -ffunction-sections -fdata-sections -fomit-frame-pointer -ffast-math" ../src/newlib-cygwin/configure --target=m68k-elfos9 --prefix=/usr --disable-newlib-supplied-syscalls --enable-multilib --with-cpu=68000 --disable-nls && \
+RUN CFLAGS_FOR_TARGET="-Os -g -mpcrel -ma6rel -ffunction-sections -fdata-sections -fomit-frame-pointer -ffast-math" ../src/newlib-cygwin/configure \ 
+  --target=m68k-elfos9 --prefix=/usr --disable-newlib-supplied-syscalls --enable-multilib --with-cpu=68000 --disable-nls && \
   make -j$(grep -c ^processor /proc/cpuinfo) && \
   mkdir -p /work/newlib-root && \
   DESTDIR=/work/newlib-root/ make install && \
@@ -70,6 +76,7 @@ RUN ./bootstrap && ./configure --prefix=/usr --with-boost-libdir=/usr/lib/x86_64
 WORKDIR /work/src/m68k-os9-tools
 RUN make && make DESTDIR=/work/root/usr install
 
-FROM ubuntu:20.04
-RUN apt update && apt install --no-install-recommends -y libboost-filesystem1.71.0 libboost-regex1.71.0 libcdio18 libiso9660-11 libvcdinfo0 && apt clean
+FROM ubuntu:26.04
+# Ubuntu 26.04's runtime ABI packages use the current Boost version and t64 CDIO name.
+RUN apt update && apt install --no-install-recommends -y libboost-filesystem1.90.0 libboost-regex1.90.0 libcdio19t64 libiso9660-12 libvcdinfo0 && apt clean
 COPY --from=build /work/root/usr /usr/
