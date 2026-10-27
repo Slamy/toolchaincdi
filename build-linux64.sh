@@ -16,7 +16,7 @@
 # example:
 #   FORCE="newlib" ./build-linux64.sh NAME
 # To start afresh: rm -rf build-linux64
-set -euo pipefail
+set -euox pipefail
 
 NAME=${1:?usage: build-linux64.sh NAME}
 SRC=$(cd "$(dirname "$0")" && pwd)/src
@@ -76,7 +76,7 @@ if needs_configure deps "$D/lib/libgmp.a" "$D/lib/libmpfr.a" "$D/lib/libmpc.a"; 
 		esac
 		# GMP 6.2.1's compiler probe is incompatible with GCC 15's default C23 dialect.
 		# Its sources (and the two libraries which use it) build cleanly as GNU C17.
-		CFLAGS=-std=gnu17 "../$b/configure" --prefix="$D" --disable-shared --enable-static \
+		CC="gcc -std=gnu17" "../$b/configure" --prefix="$D" --disable-shared --enable-static \
 		  "${DEP_ARGS[@]}" > configure.log
 		make -j"$J" > make.log
 		make install > install.log
@@ -104,7 +104,7 @@ cd ..
 step "GCC (compiler and libgcc)"
 if needs_configure gcc-bootstrap "$P/bin/$T-gcc"; then
 	rm -rf gcc-bootstrap && mkdir gcc-bootstrap && cd gcc-bootstrap
-	CFLAGS=-std=gnu17 CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" "$SRC/gcc/configure" --prefix="$P" --target=$T \
+	CXX="g++ -std=gnu++17" CC="gcc -std=gnu17" CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" "$SRC/gcc/configure" --prefix="$P" --target=$T \
 	  --enable-languages=c --enable-multilib --with-cpu=68000 --with-system-zlib --with-libgloss \
 	  --without-headers --disable-shared --disable-nls "${WITH_DEPS[@]}" \
 	  > configure.log
@@ -137,7 +137,7 @@ cd ..
 step "GCC (with newlib)"
 if needs_configure gcc-final "$P/bin/$T-gcc" "$P/$T/lib/libc.a"; then
 	rm -rf gcc-final && mkdir gcc-final && cd gcc-final
-	CFLAGS=-std=gnu17 CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" "$SRC/gcc/configure" --prefix="$P" --target=$T \
+	CXX="g++ -std=gnu++17" CC="gcc -std=gnu17" CFLAGS_FOR_TARGET="-mpcrel -ma6rel -mbsrw" "$SRC/gcc/configure" --prefix="$P" --target=$T \
 	  --enable-languages=c --enable-multilib --with-cpu=68000 --with-system-zlib --with-libgloss \
 	  --without-headers --disable-shared --disable-nls "${WITH_DEPS[@]}" \
 	  > configure.log
